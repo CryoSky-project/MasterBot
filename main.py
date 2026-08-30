@@ -283,19 +283,47 @@ def get_modes_settings_keyboard():
     builder.adjust(2, 2, 2, 1)
     return builder.as_markup(resize_keyboard=True)
 
-def get_cancel_keyboard():
+def get_cancel_keyboard(lang="uz"):
     builder = ReplyKeyboardBuilder()
-    builder.button(text="❌ Bekor qilish")
+    if lang == "ru":
+        btn_text = "❌ Отмена"
+    elif lang == "en":
+        btn_text = "❌ Cancel"
+    else:
+        btn_text = "❌ Bekor qilish"
+    builder.button(text=btn_text)
     return builder.as_markup(resize_keyboard=True)
 
-def get_client_user_keyboard(is_admin: bool = False):
+def get_client_user_keyboard(is_admin: bool = False, lang="uz"):
     builder = ReplyKeyboardBuilder()
-    builder.button(text="🛒 Bot sotib olish")
-    builder.button(text="👤 Mening botlarim va to'lovlarim")
-    builder.button(text="📞 Admin bilan bog'lanish")
-    builder.button(text="ℹ️ Bot haqida malumot")
+    if lang == "ru":
+        btn_buy = "🛒 Купить бота"
+        btn_my = "👤 Мои боты и платежи"
+        btn_contact = "📞 Связаться с админом"
+        btn_about = "ℹ️ Информация о боте"
+    elif lang == "en":
+        btn_buy = "🛒 Buy a bot"
+        btn_my = "👤 My bots and payments"
+        btn_contact = "📞 Contact Admin"
+        btn_about = "ℹ️ About Bot"
+    else:
+        btn_buy = "🛒 Bot sotib olish"
+        btn_my = "👤 Mening botlarim va to'lovlarim"
+        btn_contact = "📞 Admin bilan bog'lanish"
+        btn_about = "ℹ️ Bot haqida malumot"
+        
+    builder.button(text=btn_buy)
+    builder.button(text=btn_my)
+    builder.button(text=btn_contact)
+    builder.button(text=btn_about)
     if is_admin:
-        builder.button(text="👑 Admin paneli")
+        if lang == "ru":
+            btn_admin = "👑 Админ панель"
+        elif lang == "en":
+            btn_admin = "👑 Admin Panel"
+        else:
+            btn_admin = "👑 Admin paneli"
+        builder.button(text=btn_admin)
         builder.adjust(2, 2, 1)
     else:
         builder.adjust(2, 2)
@@ -304,6 +332,76 @@ def get_client_user_keyboard(is_admin: bool = False):
 # ==============================================================================
 # 7-BO'LIM: NAVIGATSIYA VA ASOSIY HANDLERLAR
 # ==============================================================================
+def get_lang_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🇺🇿 O'zbekcha", callback_data="set_lang:uz")
+    builder.button(text="🇷🇺 Русский", callback_data="set_lang:ru")
+    builder.button(text="🇬🇧 English", callback_data="set_lang:en")
+    builder.adjust(3)
+    return builder.as_markup()
+
+async def show_main_menu_by_lang(message: types.Message, user_id: int, lang: str):
+    import html as py_html
+    if user_id in ADMINS:
+        if lang == "ru":
+            admin_text = (
+                f"👑 <b>Добро пожаловать, Админ {py_html.escape(message.chat.first_name or '')}!</b>\n\n"
+                f"🤖 <b>SKY MASTER BOT - Панель управления</b>\n\n"
+                f"Выберите один из разделов ниже:"
+            )
+        elif lang == "en":
+            admin_text = (
+                f"👑 <b>Welcome, Admin {py_html.escape(message.chat.first_name or '')}!</b>\n\n"
+                f"🤖 <b>SKY MASTER BOT - Control Panel</b>\n\n"
+                f"Choose one of the sections below:"
+            )
+        else:
+            admin_text = (
+                f"👑 <b>Xush kelibsiz, Admin {py_html.escape(message.chat.first_name or '')}!</b>\n\n"
+                f"🤖 <b>SKY MASTER BOT - Boshqaruv Paneli</b>\n\n"
+                f"Quyidagi bo'limlardan birini tanlang:"
+            )
+        await message.answer(admin_text, parse_mode="HTML", reply_markup=get_admin_main_keyboard())
+    else:
+        if lang == "ru":
+            client_text = (
+                f"👋 <b>Здравствуйте, {py_html.escape(message.chat.first_name or '')}!</b>\n\n"
+                f"🤖 Добро пожаловать в систему <b>SKY MASTER BOT</b>!\n\n"
+                f"Здесь вы можете приобрести готового бота или отслеживать сроки оплаты ваших ботов."
+            )
+        elif lang == "en":
+            client_text = (
+                f"👋 <b>Hello, {py_html.escape(message.chat.first_name or '')}!</b>\n\n"
+                f"🤖 Welcome to <b>SKY MASTER BOT</b> system!\n\n"
+                f"Here you can purchase a ready-made bot or track the payment terms of your bots."
+            )
+        else:
+            client_text = (
+                f"👋 <b>Assalomu alaykum, {py_html.escape(message.chat.first_name or '')}!</b>\n\n"
+                f"🤖 <b>SKY MASTER BOT</b> tizimiga xush kelibsiz!\n\n"
+                f"Siz bu yerda tayyor bot sotib olishingiz yoki o'z botingizning to'lov muddatlarini kuzatishingiz mumkin."
+            )
+        await message.answer(client_text, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=False, lang=lang))
+
+@dp.callback_query(F.data.startswith("set_lang:"))
+async def process_set_lang_callback(call: types.CallbackQuery, state: FSMContext):
+    await call.answer()
+    lang = call.data.split(":")[1]
+    user_id = call.from_user.id
+    await set_user_lang(user_id, lang)
+    await show_main_menu_by_lang(call.message, user_id, lang)
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+
+@dp.message(Command("lang"))
+async def cmd_lang(message: types.Message):
+    await message.answer(
+        "🌎 Iltimos, tilni tanlang / Пожалуйста, выберите язык / Please choose a language:",
+        reply_markup=get_lang_keyboard()
+    )
+
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
@@ -313,22 +411,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     await add_user(user_id, username, full_name)
     
-    if user_id in ADMINS:
-        admin_text = (
-            f"👑 <b>Xush kelibsiz, Admin {py_html.escape(full_name)}!</b>\n\n"
-            f"🤖 <b>SKY MASTER BOT - Boshqaruv Paneli</b>\n\n"
-            f"Quyidagi bo'limlardan birini tanlang:"
-        )
-        await message.answer(admin_text, parse_mode="HTML", reply_markup=get_admin_main_keyboard())
-    else:
-        client_text = (
-            f"👋 <b>Assalomu alaykum, {py_html.escape(full_name)}!</b>\n\n"
-            f"🤖 <b>SKY MASTER BOT</b> tizimiga xush kelibsiz!\n\n"
-            f"Siz bu yerda tayyor bot sotib olishingiz yoki o'z botingizning to'lov muddatlarini kuzatishingiz mumkin."
-        )
-        await message.answer(client_text, parse_mode="HTML", reply_markup=get_client_user_keyboard())
+    await message.answer(
+        "🌎 Iltimos, tilni tanlang / Пожалуйста, выберите язык / Please choose a language:",
+        reply_markup=get_lang_keyboard()
+    )
 
-@dp.message(F.text == "❌ Bekor qilish")
+@dp.message(F.text.in_(["❌ Bekor qilish", "❌ Отмена", "❌ Cancel"]))
 async def cancel_any_action(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     user_id = message.from_user.id
@@ -353,7 +441,7 @@ async def cancel_any_action(message: types.Message, state: FSMContext):
         await state.clear()
         await cmd_start(message, state)
 
-@dp.message(F.text == "⬅️ Orqaga")
+@dp.message(F.text.in_(["⬅️ Orqaga", "⬅️ Назад", "⬅️ Back"]))
 async def back_to_previous_menu(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     user_id = message.from_user.id
@@ -405,7 +493,7 @@ async def admin_switch_to_user_panel(message: types.Message, state: FSMContext):
     )
     await message.answer(user_text, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=True))
 
-@dp.message(F.text == "👑 Admin paneli")
+@dp.message(F.text.in_(["👑 Admin paneli", "👑 Админ панель", "👑 Admin Panel"]))
 async def admin_switch_to_admin_panel(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMINS:
         return
@@ -470,7 +558,7 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
 # ==============================================================================
 # 9-BO'LIM: FOYDALANUVCHI MA'LUMOTLARI VA YO'RIQNOMALAR
 # ==============================================================================
-@dp.message(F.text == "ℹ️ Bot haqida malumot")
+@dp.message(F.text.in_(["ℹ️ Bot haqida malumot", "ℹ️ Информация о боте", "ℹ️ About Bot"]))
 async def client_guide_info(message: types.Message):
     """Foydalanuvchiga botdan foydalanish qoidalari va yo'riqnomalarini ko'rsatish."""
     guide_text = (
@@ -680,7 +768,7 @@ def parse_receipt_time(time_str: str):
         return h, m
     return None
 
-@dp.message(F.text == "🛒 Bot sotib olish")
+@dp.message(F.text.in_(["🛒 Bot sotib olish", "🛒 Купить бота", "🛒 Buy a bot"]))
 async def start_buy_bot_shop(message: types.Message, state: FSMContext):
     """Mijoz botlari uchun sotib olish jarayonini boshlash."""
     await state.clear()
@@ -964,15 +1052,53 @@ async def process_buy_payment_method_callback(call: types.CallbackQuery, state: 
             f"📸 To'lovni amalga oshirgach, to'lov <b>CHEKINI (skrinshot yoki rasmini)</b> rasm yoki hujjat ko'rinishida shu yerga yuboring:"
         )
         
+        lang = await get_user_lang(user_id)
+        if lang == "ru":
+            pay_text = (
+                f"💳 <b>ОПЛАТА КАРТОЙ (ПОКУПКА БОТА)</b>\n\n"
+                f"🤖 <b>Username бота:</b> {actual_username}\n"
+                f"⚙️ <b>Выбранный режим:</b> {mode.upper()}\n"
+                f"💰 <b>Общая сумма оплаты:</b> <b>{int(total):,} сум</b>\n"
+                f"<i>(Цена бота: {int(bot_sale_p):,} сум + 1-й месяц: {int(monthly):,} сум)</i>\n\n"
+                f"💳 <b>Номер карты:</b>\n"
+                f"<code>{card_num}</code>\n\n"
+                f"📲 Произведите оплату на указанную карту.\n\n"
+                f"📸 После оплаты отправьте <b>ЧЕК (скриншот)</b> в виде фото или документа сюда:"
+            )
+            btn_copy_text = "📋 Копировать номер карты"
+        elif lang == "en":
+            pay_text = (
+                f"💳 <b>CARD PAYMENT (BUY BOT)</b>\n\n"
+                f"🤖 <b>Bot Username:</b> {actual_username}\n"
+                f"⚙️ <b>Selected mode:</b> {mode.upper()}\n"
+                f"💰 <b>Total payment:</b> <b>{int(total):,} UZS</b>\n"
+                f"<i>(Bot price: {int(bot_sale_p):,} UZS + 1st month: {int(monthly):,} UZS)</i>\n\n"
+                f"💳 <b>Card number:</b>\n"
+                f"<code>{card_num}</code>\n\n"
+                f"📲 Make the payment to the specified card.\n\n"
+                f"📸 After payment, send the <b>RECEIPT (screenshot)</b> as a photo or document here:"
+            )
+            btn_copy_text = "📋 Copy card number"
+        else:
+            pay_text = (
+                f"💳 <b>KARTA ORQALI TO'LOV (BOT XARID QILISH)</b>\n\n"
+                f"🤖 <b>Bot Username:</b> {actual_username}\n"
+                f"⚙️ <b>Tanlangan rejim:</b> {mode.upper()}\n"
+                f"💰 <b>Umumiy to'lov summasi:</b> <b>{int(total):,} som</b>\n"
+                f"<i>(Bot narxi: {int(bot_sale_p):,} som + 1-oylik to'lov: {int(monthly):,} som)</i>\n\n"
+                f"💳 <b>Karta raqami:</b>\n"
+                f"<code>{card_num}</code>\n\n"
+                f"📲 Yuqoridagi kartaga to'lovni amalga oshiring.\n\n"
+                f"📸 To'lovni amalga oshirgach, to'lov <b>CHEKINI (skrinshotini)</b> rasm yoki hujjat ko'rinishida shu yerga yuboring:"
+            )
+            btn_copy_text = "📋 Kartani nusxalash"
+
         builder = InlineKeyboardBuilder()
-        builder.button(text="📲 Click App", url="https://click.uz")
-        builder.button(text="📲 Payme App", url="https://payme.uz")
-        builder.button(text="📋 Kartani nusxalash", callback_data=f"copy_card:{card_num}")
-        builder.adjust(2, 1)
+        builder.button(text=btn_copy_text, callback_data=f"copy_card:{card_num}")
         
         await call.message.delete()
-        await call.message.answer(pay_text, parse_mode="HTML", reply_markup=get_cancel_keyboard())
-        await call.message.answer("To'lov ilovalari:", reply_markup=builder.as_markup())
+        await call.message.answer("❌", reply_markup=get_cancel_keyboard(lang))
+        await call.message.answer(pay_text, parse_mode="HTML", reply_markup=builder.as_markup())
 
 # ==============================================================================
 # 12-BO'LIM: TO'LOVNI TEKSHIRISH VA MUVAFFQQIYATLI TO'LOV HANDLERLARI
@@ -2263,36 +2389,74 @@ async def process_bot_action_callback(call: types.CallbackQuery):
 # ==============================================================================
 # 19-BO'LIM: FOYDALANUVCHI KABINETI VA UZAYTIRISHLAR
 # ==============================================================================
-@dp.message(F.text == "👤 Mening botlarim va to'lovlarim")
+@dp.message(F.text.in_(["👤 Mening botlarim va to'lovlarim", "👤 Мои боты и платежи", "👤 My bots and payments"]))
 async def client_my_bots(message: types.Message):
-    """Foydalanuvchiga tegishli barcha botlarni, ularning statistikasi va uzaytirish tugmalari bilan ko'rsatish."""
+    """Foydalanuvchiga tegishli barcha botlarni, ularning statistikasi va uzaytirish tugmalari bilan ko'rsatish (3 ta tilda)."""
     user_id = message.from_user.id
     bots = await get_client_bots_by_user(user_id)
+    lang = await get_user_lang(user_id)
     
     if not bots:
-        await message.answer("📭 Sizda ro'yxatdan o'tgan botlar topilmadi.")
+        if lang == "ru":
+            await message.answer("📭 У вас нет зарегистрированных ботов.")
+        elif lang == "en":
+            await message.answer("📭 No registered bots found.")
+        else:
+            await message.answer("📭 Sizda ro'yxatdan o'tgan botlar topilmadi.")
         return
 
-    await message.answer("👤 <b>Sizning Botlaringiz va To'lov Muddatlari:</b>", parse_mode="HTML")
+    if lang == "ru":
+        await message.answer("👤 <b>Ваши боты и сроки оплаты:</b>", parse_mode="HTML")
+    elif lang == "en":
+        await message.answer("👤 <b>Your Bots and Payment Terms:</b>", parse_mode="HTML")
+    else:
+        await message.answer("👤 <b>Sizning Botlaringiz va To'lov Muddatlari:</b>", parse_mode="HTML")
+        
     today = datetime.now().date()
     
     for b in bots:
         n_date = b['next_payment_date']
         rem_days = (n_date - today).days
-        st = "🟢 Faol" if rem_days > 0 else "🔴 To'lov vaqti kelgan!"
         
-        bot_desc = (
-            f"🤖 <b>Bot:</b> {b['bot_username']}\n"
-            f"📊 <b>Holati:</b> {st}\n"
-            f"⚙️ <b>Rejimi:</b> {b['mode'].upper()}\n"
-            f"💰 <b>Oylik to'lov:</b> {int(b['monthly_price']):,} som\n"
-            f"📅 <b>Oxirgi to'lov:</b> {b['last_payment_date']}\n"
-            f"⏳ <b>Keyingi to'lov:</b> <b>{n_date}</b>\n"
-            f"⌛ <b>Qolgan vaqt:</b> <b>{max(0, rem_days)} kun</b>"
-        )
+        if lang == "ru":
+            st = "🟢 Активен" if rem_days > 0 else "🔴 Требуется оплата!"
+            bot_desc = (
+                f"🤖 <b>Бот:</b> {b['bot_username']}\n"
+                f"📊 <b>Статус:</b> {st}\n"
+                f"⚙️ <b>Режим:</b> {b['mode'].upper()}\n"
+                f"💰 <b>Ежемесячный платеж:</b> {int(b['monthly_price']):,} сум\n"
+                f"📅 <b>Последний платеж:</b> {b['last_payment_date']}\n"
+                f"⏳ <b>Следующий платеж:</b> <b>{n_date}</b>\n"
+                f"⌛ <b>Осталось дней:</b> <b>{max(0, rem_days)} дн.</b>"
+            )
+            btn_text = "💳 Продлить срок"
+        elif lang == "en":
+            st = "🟢 Active" if rem_days > 0 else "🔴 Overdue payment!"
+            bot_desc = (
+                f"🤖 <b>Bot:</b> {b['bot_username']}\n"
+                f"📊 <b>Status:</b> {st}\n"
+                f"⚙️ <b>Mode:</b> {b['mode'].upper()}\n"
+                f"💰 <b>Monthly payment:</b> {int(b['monthly_price']):,} UZS\n"
+                f"📅 <b>Last payment:</b> {b['last_payment_date']}\n"
+                f"⏳ <b>Next payment:</b> <b>{n_date}</b>\n"
+                f"⌛ <b>Time left:</b> <b>{max(0, rem_days)} day(s)</b>"
+            )
+            btn_text = "💳 Extend duration"
+        else:
+            st = "🟢 Faol" if rem_days > 0 else "🔴 To'lov vaqti kelgan!"
+            bot_desc = (
+                f"🤖 <b>Bot:</b> {b['bot_username']}\n"
+                f"📊 <b>Holati:</b> {st}\n"
+                f"⚙️ <b>Rejimi:</b> {b['mode'].upper()}\n"
+                f"💰 <b>Oylik to'lov:</b> {int(b['monthly_price']):,} som\n"
+                f"📅 <b>Oxirgi to'lov:</b> {b['last_payment_date']}\n"
+                f"⏳ <b>Keyingi to'lov:</b> <b>{n_date}</b>\n"
+                f"⌛ <b>Qolgan vaqt:</b> <b>{max(0, rem_days)} kun</b>"
+            )
+            btn_text = "💳 Uzaytirish (Renewal)"
         
         builder = InlineKeyboardBuilder()
-        builder.button(text="💳 Uzaytirish (Renewal)", callback_data=f"renew_bot:{b['id']}")
+        builder.button(text=btn_text, callback_data=f"renew_bot:{b['id']}")
         
         await message.answer(bot_desc, parse_mode="HTML", reply_markup=builder.as_markup())
 
@@ -2426,15 +2590,50 @@ async def process_renew_payment_method_callback(call: types.CallbackQuery, state
             f"📸 To'lovdan so'ng <b>CHEKINI (skrinshot)</b> rasm yoki hujjat ko'rinishida shu yerga yuboring:"
         )
         
+        lang = await get_user_lang(call.from_user.id)
+        if lang == "ru":
+            pay_text = (
+                f"💳 <b>ОПЛАТА КАРТОЙ (ПРОДЛЕНИЕ БОТА)</b>\n\n"
+                f"🤖 <b>Бот:</b> {client['bot_username']}\n"
+                f"⏳ <b>Срок:</b> {months} мес.\n"
+                f"💰 <b>Общая сумма:</b> <b>{int(total_price):,} сум</b>\n\n"
+                f"💳 <b>Номер карты:</b>\n"
+                f"<code>{card_num}</code>\n\n"
+                f"📲 Произведите оплату на указанную карту.\n\n"
+                f"📸 После оплаты отправьте <b>ЧЕК (скриншот)</b> в виде фото или документа сюда:"
+            )
+            btn_copy_text = "📋 Копировать номер карты"
+        elif lang == "en":
+            pay_text = (
+                f"💳 <b>CARD PAYMENT (BOT RENEWAL)</b>\n\n"
+                f"🤖 <b>Bot:</b> {client['bot_username']}\n"
+                f"⏳ <b>Duration:</b> {months} month(s)\n"
+                f"💰 <b>Total payment:</b> <b>{int(total_price):,} UZS</b>\n\n"
+                f"💳 <b>Card number:</b>\n"
+                f"<code>{card_num}</code>\n\n"
+                f"📲 Make the payment to the specified card.\n\n"
+                f"📸 After payment, send the <b>RECEIPT (screenshot)</b> as a photo or document here:"
+            )
+            btn_copy_text = "📋 Copy card number"
+        else:
+            pay_text = (
+                f"💳 <b>KARTA ORQALI TO'LOV (BOTNI UZAYTIRISH)</b>\n\n"
+                f"🤖 <b>Bot:</b> {client['bot_username']}\n"
+                f"⏳ <b>Muddat:</b> {months} oy\n"
+                f"💰 <b>Umumiy to'lov:</b> <b>{int(total_price):,} som</b>\n\n"
+                f"💳 <b>Karta raqami:</b>\n"
+                f"<code>{card_num}</code>\n\n"
+                f"📲 Yuqoridagi kartaga to'lovni amalga oshiring.\n\n"
+                f"📸 To'lovdan so'ng <b>CHEKINI (skrinshot)</b> rasm yoki hujjat ko'rinishida shu yerga yuboring:"
+            )
+            btn_copy_text = "📋 Kartani nusxalash"
+
         builder = InlineKeyboardBuilder()
-        builder.button(text="📲 Click App", url="https://click.uz")
-        builder.button(text="📲 Payme App", url="https://payme.uz")
-        builder.button(text="📋 Kartani nusxalash", callback_data=f"copy_card:{card_num}")
-        builder.adjust(2, 1)
+        builder.button(text=btn_copy_text, callback_data=f"copy_card:{card_num}")
         
         await call.message.delete()
-        await call.message.answer(pay_text, parse_mode="HTML", reply_markup=get_cancel_keyboard())
-        await call.message.answer("To'lov ilovalari:", reply_markup=builder.as_markup())
+        await call.message.answer("❌", reply_markup=get_cancel_keyboard(lang))
+        await call.message.answer(pay_text, parse_mode="HTML", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("copy_card:"))
 async def process_copy_card_callback(call: types.CallbackQuery):
@@ -2445,7 +2644,7 @@ async def process_copy_card_callback(call: types.CallbackQuery):
 # ==============================================================================
 # 20-BO'LIM: STATISTIKA VA ALOQA MA'LUMOTLARI
 # ==============================================================================
-@dp.message(F.text == "📞 Admin bilan bog'lanish")
+@dp.message(F.text.in_(["📞 Admin bilan bog'lanish", "📞 Связаться с админом", "📞 Contact Admin"]))
 async def client_contact(message: types.Message):
     """To'lov karta ma'lumotlari va admin yordam kontaktlarini ko'rsatish."""
     card_num = await get_setting("card_number", "8600 0000 0000 0000")

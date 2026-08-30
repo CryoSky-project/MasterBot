@@ -56,6 +56,7 @@ class DatabaseManager:
                     user_id INTEGER PRIMARY KEY,
                     username TEXT,
                     full_name TEXT,
+                    lang TEXT DEFAULT 'uz',
                     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
@@ -112,6 +113,7 @@ class DatabaseManager:
                         user_id BIGINT PRIMARY KEY,
                         username TEXT,
                         full_name TEXT,
+                        lang TEXT DEFAULT 'uz',
                         joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
@@ -414,3 +416,25 @@ async def update_order_status(order_id: int, status: str):
     else:
         async with db.pg_pool.acquire() as conn:
             await conn.execute("UPDATE orders SET status = $1 WHERE id = $2;", status, order_id)
+
+async def get_user_lang(user_id: int) -> str:
+    """Foydalanuvchining til sozlamasini olish (default: uz) (o'zbekcha sharh)"""
+    db = await get_db()
+    if db.is_sqlite:
+        async with db.sqlite_conn.execute("SELECT lang FROM users WHERE user_id = ?;", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if (row is not None and row[0]) else "uz"
+    else:
+        async with db.pg_pool.acquire() as conn:
+            val = await conn.fetchval("SELECT lang FROM users WHERE user_id = $1;", user_id)
+            return val if val else "uz"
+
+async def set_user_lang(user_id: int, lang: str):
+    """Foydalanuvchining til sozlamasini saqlash (o'zbekcha sharh)"""
+    db = await get_db()
+    if db.is_sqlite:
+        await db.sqlite_conn.execute("UPDATE users SET lang = ? WHERE user_id = ?;", (lang, user_id))
+        await db.sqlite_conn.commit()
+    else:
+        async with db.pg_pool.acquire() as conn:
+            await conn.execute("UPDATE users SET lang = $1 WHERE user_id = $2;", lang, user_id)
