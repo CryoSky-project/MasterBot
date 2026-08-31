@@ -35,7 +35,7 @@ class DatabaseManager:
             
         try:
             # PostgreSQL-ga ulanishga urinib ko'rish
-            self.pg_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=10)
+            self.pg_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=10, statement_cache_size=0)
             # Ulanishni tekshirish
             async with self.pg_pool.acquire() as conn:
                 await conn.execute("SELECT 1")

@@ -2941,6 +2941,12 @@ async def check_payments_and_notify():
                 )
             elif rem_days < 0 and status == 'active':
                 await update_client_field(c['id'], 'status', 'expired')
+                
+                # Stop the bot service on VPS automatically
+                folder_name = c.get('server_folder', '')
+                if folder_name:
+                    await run_vps_command(f"systemctl stop {folder_name}.service")
+                    
                 msg = (
                     f"🔴 <b>Botingizning oylik to'lov muddati tugadi va bot to'xtatildi!</b>\n\n"
                     f"🤖 <b>Bot:</b> {bot_un}\n"
@@ -3095,16 +3101,17 @@ async def on_startup(app):
             asyncio.create_task(self_ping_loop(base_url))
         except Exception as e:
             print(f"Webhook o'rnatishda xatolik: {e}. Polling rejimiga o'tilmoqda...")
-            await bot.delete_webhook()
+            await bot.delete_webhook(drop_pending_updates=True)
             asyncio.create_task(run_polling())
     else:
         print("WEBHOOK_URL topilmadi. Polling rejimida boshlanmoqda...")
-        await bot.delete_webhook()
+        await bot.delete_webhook(drop_pending_updates=True)
         asyncio.create_task(run_polling())
 
 async def run_polling():
     try:
         print("🚀 Polling ishga tushdi...")
+        await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot, polling_timeout=10)
     except Exception as e:
         print(f"Polling xatosi: {e}")
