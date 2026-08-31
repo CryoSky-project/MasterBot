@@ -2754,7 +2754,7 @@ async def check_payments_and_notify():
     except Exception as e:
         logging.error(f"Error in check_payments_and_notify: {e}")
 
-from aiogram.webhook.aiohttp_impl import SimpleRequestHandler, setup_application
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 app = web.Application()
 
