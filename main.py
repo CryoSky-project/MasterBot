@@ -26,7 +26,8 @@ from database import (
     init_db, add_user, get_all_users, add_client_bot, get_all_clients,
     get_client_by_id, update_client_field, delete_client_bot,
     get_client_bots_by_user, get_setting, set_setting, create_order,
-    get_order_by_id, update_order_status, search_clients
+    get_order_by_id, update_order_status, search_clients,
+    get_user_lang, set_user_lang
 )
 
 # Muhit o'zgaruvchilarini yuklash
