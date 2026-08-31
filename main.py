@@ -79,7 +79,16 @@ ADMINS = ADMIN_IDS
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
+active_deploys = {}
+
 async def deploy_bot_task(order_id: int, user_id: int, bot_username: str, bot_token: str, mode: str):
+    task = asyncio.current_task()
+    deploy_info = {
+        'task': task,
+        'folder_name': None,
+        'db_name': None
+    }
+    active_deploys[user_id] = deploy_info
     try:
         logging.info(f"[Deploy] Starting background deployment for order {order_id}...")
         
@@ -98,6 +107,8 @@ async def deploy_bot_task(order_id: int, user_id: int, bot_username: str, bot_to
             
         folder_name = f"sky-{num}"
         db_name = f"sky{num}"
+        deploy_info['folder_name'] = folder_name
+        deploy_info['db_name'] = db_name
         logging.info(f"[Deploy] Selected folder: {folder_name}, database: {db_name}")
         
         # 2. Create PostgreSQL database and user
@@ -196,6 +207,8 @@ async def deploy_bot_task(order_id: int, user_id: int, bot_username: str, bot_to
             except Exception:
                 pass
                 
+    except asyncio.CancelledError:
+        logging.info(f"[Deploy] Task cancelled by user {user_id}")
     except Exception as e:
         logging.error(f"[Deploy] Error in deploy_bot_task: {e}")
         try:
@@ -208,6 +221,8 @@ async def deploy_bot_task(order_id: int, user_id: int, bot_username: str, bot_to
                 await bot.send_message(admin_id, text=f"⚠️ <b>AUTO DEPLOY XATOLIK!</b>\\nOrder ID: #{order_id}\\nUser ID: {user_id}\\nBot: {bot_username}\\nXatolik: {e}", parse_mode="HTML")
             except Exception:
                 pass
+    finally:
+        active_deploys.pop(user_id, None)
 
 # ==============================================================================
 # 3-BO'LIM: O'ZGARMASLAR VA VALIDATSIYA
@@ -334,6 +349,7 @@ class AddClientState(StatesGroup):
     waiting_for_bot_token = State()
     waiting_for_server_folder = State()
     waiting_for_mode = State()
+    waiting_for_monthly_price = State()
     waiting_for_last_payment = State()
     waiting_for_next_payment = State()
     waiting_for_validation_confirm = State()
@@ -1178,29 +1194,65 @@ async def process_buy_bot_token(message: types.Message, state: FSMContext):
         await message.answer(f"✅ <b>Ulanish muvaffaqiyatli!</b>\n🤖 Bot: <b>{actual_username}</b> topildi.", parse_mode="HTML")
         
         await state.update_data(bot_token=token, actual_username=actual_username)
-        await state.set_state(BuyBotState.waiting_for_pay_method)
         
         data = await state.get_data()
         mode = data['buy_mode']
         total = data['total_price']
         monthly = data['monthly_price']
-        
         bot_sale_p = safe_int(await get_setting("bot_sale_price", "60000"))
+        card_num = await get_setting("card_number", "8600 0000 0000 0000")
         
-        text = (
-            f"⚙️ <b>Tanlangan rejim:</b> {mode.upper()}\n"
+        # Create pending order in database
+        order_id = await create_order(message.from_user.id, actual_username, token, mode, total, None)
+        await state.update_data(buy_order_id=order_id)
+        await state.set_state(BuyBotState.waiting_for_receipt)
+        
+        pay_text = (
+            f"💳 <b>KARTA ORQALI TO'LOV (BOT XARID QILISH)</b>\n\n"
             f"🤖 <b>Bot Username:</b> {actual_username}\n"
+            f"⚙️ <b>Tanlangan rejim:</b> {mode.upper()}\n"
             f"💰 <b>Umumiy to'lov summasi:</b> <b>{int(total):,} som</b>\n"
             f"<i>(Bot narxi: {int(bot_sale_p):,} som + 1-oylik to'lov: {int(monthly):,} som)</i>\n\n"
-            f"Iltimos, to'lov usulini tanlang:"
+            f"💳 <b>Karta raqami:</b>\n"
+            f"<code>{card_num}</code>\n\n"
+            f"📲 Click / Payme / Uzum ilovalari orqali yuqoridagi kartaga to'lov qiling.\n\n"
+            f"📸 To'lovni amalga oshirgach, to'lov <b>CHEKINI (skrinshot yoki rasmini)</b> rasm yoki hujjat ko'rinishida shu yerga yuboring:"
         )
         
+        lang = await get_user_lang(message.from_user.id)
+        if lang == "ru":
+            pay_text = (
+                f"💳 <b>ОПЛАТА КАРТОЙ (ПОКУПКА БОТА)</b>\n\n"
+                f"🤖 <b>Username бота:</b> {actual_username}\n"
+                f"⚙️ <b>Выбранный режим:</b> {mode.upper()}\n"
+                f"💰 <b>Общая сумма оплаты:</b> <b>{int(total):,} сум</b>\n"
+                f"<i>(Цена бота: {int(bot_sale_p):,} сум + 1-й месяц: {int(monthly):,} сум)</i>\n\n"
+                f"💳 <b>Номер карты:</b>\n"
+                f"<code>{card_num}</code>\n\n"
+                f"📲 Произведите оплату на указанную карту.\n\n"
+                f"📸 После оплаты отправьте <b>ЧЕК (скриншот)</b> в виде фото или документа сюда:"
+            )
+            btn_copy_text = "📋 Копировать номер карты"
+        elif lang == "en":
+            pay_text = (
+                f"💳 <b>CARD PAYMENT (BUY BOT)</b>\n\n"
+                f"🤖 <b>Bot Username:</b> {actual_username}\n"
+                f"⚙️ <b>Selected mode:</b> {mode.upper()}\n"
+                f"💰 <b>Total payment:</b> <b>{int(total):,} UZS</b>\n"
+                f"<i>(Bot price: {int(bot_sale_p):,} UZS + 1st month: {int(monthly):,} UZS)</i>\n\n"
+                f"💳 <b>Card number:</b>\n"
+                f"<code>{card_num}</code>\n\n"
+                f"📲 Make the payment to the specified card.\n\n"
+                f"📸 After payment, send the <b>RECEIPT (screenshot)</b> as a photo or document here:"
+            )
+            btn_copy_text = "📋 Copy card number"
+        else:
+            btn_copy_text = "📋 Kartani nusxalash"
+            
         builder = InlineKeyboardBuilder()
-        builder.button(text="💳 Telegram orqali tezkor to'lov (Click/Payme)", callback_data="buy_pay:telegram")
-        builder.button(text="👤 Karta orqali (Rasm/Chek yuborish)", callback_data="buy_pay:card")
-        builder.adjust(1, 1)
+        builder.button(text=btn_copy_text, callback_data=f"copy_card:{card_num}")
         
-        await message.answer(text, parse_mode="HTML", reply_markup=builder.as_markup())
+        await message.answer(pay_text, parse_mode="HTML", reply_markup=builder.as_markup())
     except Exception as e:
         await wait_msg.delete()
         await message.answer(f"❌ <b>API Token yaroqsiz!</b> BotFather bergan tokenni to'g'ri yuboring:\n\n<i>(Xatolik: {e})</i>", parse_mode="HTML")
@@ -1369,7 +1421,9 @@ async def process_successful_payment(message: types.Message, state: FSMContext):
                 f"🤖 <b>Botni avtomatik yaratish tizimi ishga tushdi!</b>\n"
                 f"Botingiz yasalmoqda, iltimos 10-20 daqiqa kuting. Tayyor bo'lsa xabar beramiz."
             )
-            await message.answer(user_msg, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=(message.from_user.id in ADMINS)))
+            builder_cancel = InlineKeyboardBuilder()
+            builder_cancel.button(text="❌ Орнатуды тоқтату (Cancel)", callback_data="cancel_deploy")
+            await message.answer(user_msg, parse_mode="HTML", reply_markup=builder_cancel.as_markup())
             
             admin_msg = (
                 f"🔔 <b>AUTO TASDIQLASH (Bot o'rnatilmoqda - №#{order_id})</b>\n\n"
@@ -1527,8 +1581,12 @@ async def process_user_receipt(message: types.Message, state: FSMContext):
     
     from database import get_db
     p = await get_db()
-    async with p.acquire() as conn:
-        await conn.execute("UPDATE orders SET receipt_file_id = $1 WHERE id = $2;", file_id, order_id)
+    if p.is_sqlite:
+        await p.sqlite_conn.execute("UPDATE orders SET receipt_file_id = ? WHERE id = ?;", (file_id, order_id))
+        await p.sqlite_conn.commit()
+    else:
+        async with p.pg_pool.acquire() as conn:
+            await conn.execute("UPDATE orders SET receipt_file_id = $1 WHERE id = $2;", file_id, order_id)
         
     await state.clear()
     
@@ -1590,14 +1648,22 @@ async def admin_approve_order(call: types.CallbackQuery, state: FSMContext):
         months = int(mode_str.split(":")[1])
         await update_order_status(order_id, "approved")
         
-        # Agar kerak bo'lsa get_db import qilinadi (u allaqachon database.py ichida)
-        from database import get_db
+        from database import get_db, sqlite_row_to_dict
         p = await get_db()
-        async with p.acquire() as conn:
-            client = await conn.fetchrow(
-                "SELECT * FROM master_clients WHERE client_id = $1 AND bot_username = $2 ORDER BY id DESC LIMIT 1;",
-                order['user_id'], order['bot_username']
-            )
+        if p.is_sqlite:
+            date_fields = ['last_payment_date', 'next_payment_date']
+            async with p.sqlite_conn.execute(
+                "SELECT * FROM master_clients WHERE client_id = ? AND bot_username = ? ORDER BY id DESC LIMIT 1;",
+                (order['user_id'], order['bot_username'])
+            ) as cursor:
+                row = await cursor.fetchone()
+                client = sqlite_row_to_dict(row, date_fields)
+        else:
+            async with p.pg_pool.acquire() as conn:
+                client = await conn.fetchrow(
+                    "SELECT * FROM master_clients WHERE client_id = $1 AND bot_username = $2 ORDER BY id DESC LIMIT 1;",
+                    order['user_id'], order['bot_username']
+                )
             
         if not client:
             await call.message.reply("❌ Xatolik: Ushbu mijoz boti topilmadi!")
@@ -1882,15 +1948,55 @@ async def process_server_folder(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("set_mode:"))
 async def process_mode_choice(call: types.CallbackQuery, state: FSMContext):
-    """Rejim sozlamasini saqlash va oxirgi to'lov sanasini tugmalar orqali so'rash."""
+    """Rejim sozlamasini saqlash va oylik narxni so'rash."""
     await call.answer()
     mode = call.data.split(":")[1]
     poll_p = await get_setting("polling_price", "15000")
     web_p = await get_setting("webhook_price", "20000")
     
     m_price = safe_int(poll_p) if mode == "polling" else safe_int(web_p)
-    await state.update_data(mode=mode, monthly_price=m_price)
+    await state.update_data(mode=mode, default_monthly_price=m_price)
     
+    await state.set_state(AddClientState.waiting_for_monthly_price)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"💵 Standart ({int(m_price):,} som)", callback_data="set_price_choice:default")
+    builder.adjust(1)
+    
+    await call.message.edit_text(
+        f"✅ Rejim: <b>{mode.upper()}</b>\n\n"
+        f"📝 <b>6-Qadam: Oylik to'lov narxini kiriting yoki standart narxni tanlang:</b>\n\n"
+        f"<i>(Narxni somda yozib yuborishingiz yoki standart narx tugmasini bosishingiz mumkin)</i>",
+        parse_mode="HTML",
+        reply_markup=builder.as_markup()
+    )
+
+@dp.callback_query(F.data == "set_price_choice:default")
+async def process_default_price_choice(call: types.CallbackQuery, state: FSMContext):
+    """Standart oylik narx tanlanganida."""
+    await call.answer()
+    data = await state.get_data()
+    m_price = data.get("default_monthly_price", 15000)
+    await state.update_data(monthly_price=m_price)
+    await ask_for_last_payment_date(call.message, state)
+
+@dp.message(AddClientState.waiting_for_monthly_price)
+async def process_custom_monthly_price(message: types.Message, state: FSMContext):
+    """Qo'lda kiritilgan oylik narxni saqlash."""
+    text = message.text.strip()
+    if is_menu_button_or_command(text):
+        await state.clear()
+        return
+        
+    try:
+        price = float(text)
+        await state.update_data(monthly_price=price)
+        await ask_for_last_payment_date(message, state)
+    except ValueError:
+        await message.answer("❌ Noto'g'ri narx. Faqat son kiriting (Masalan: 18000):")
+
+async def ask_for_last_payment_date(message_or_call_msg, state: FSMContext):
+    """Oxirgi to'lov sanasini so'rash."""
     await state.set_state(AddClientState.waiting_for_last_payment)
     today_str = datetime.now().strftime("%Y-%m-%d")
     
@@ -1899,13 +2005,18 @@ async def process_mode_choice(call: types.CallbackQuery, state: FSMContext):
     builder.button(text="📅 Kecha (Kechagi sana)", callback_data="add_date:yesterday")
     builder.adjust(1)
     
-    await call.message.edit_text(
-        f"✅ Rejim: <b>{mode.upper()}</b> ({int(m_price):,} som)\n\n"
-        f"📝 <b>6-Qadam: Oxirgi to'lov qilingan sanani kiriting yoki tanlang:</b>\n\n"
-        f"<i>(Quyidagi tugmalardan tanlashingiz yoki matn ko'rinishida yuborishingiz mumkin. Misol: <code>{today_str}</code>)</i>",
-        parse_mode="HTML",
-        reply_markup=builder.as_markup()
+    msg_text = (
+        f"📝 <b>7-Qadam: Oxirgi to'lov qilingan sanani kiriting yoki tanlang:</b>\n\n"
+        f"<i>(Quyidagi tugmalardan tanlashingiz yoki matn ko'rinishida yuborishingiz mumkin. Misol: <code>{today_str}</code>)</i>"
     )
+    
+    if isinstance(message_or_call_msg, types.Message) and getattr(message_or_call_msg, 'from_user', None) and message_or_call_msg.from_user.is_bot:
+        try:
+            await message_or_call_msg.edit_text(msg_text, parse_mode="HTML", reply_markup=builder.as_markup())
+            return
+        except Exception:
+            pass
+    await message_or_call_msg.answer(msg_text, parse_mode="HTML", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("add_date:"))
 async def process_add_date_callback(call: types.CallbackQuery, state: FSMContext):
@@ -1933,7 +2044,7 @@ async def process_add_date_callback(call: types.CallbackQuery, state: FSMContext
     
     await call.message.edit_text(
         f"✅ Oxirgi to'lov sanasi: <b>{date_val}</b>\n\n"
-        f"📝 <b>7-Qadam: Keyingi to'lov sanasini tanlang yoki kiriting:</b>\n\n"
+        f"📝 <b>8-Qadam: Keyingi to'lov sanasini tanlang yoki kiriting:</b>\n\n"
         f"<i>(Qadamli muddatni tanlang yoki qo'lda yozib yuboring. Misol: <code>{next_suggest}</code>)</i>",
         parse_mode="HTML",
         reply_markup=builder.as_markup()
@@ -1946,7 +2057,7 @@ async def process_last_payment(message: types.Message, state: FSMContext):
     if is_menu_button_or_command(date_input):
         await state.clear()
         return
-
+ 
     try:
         parsed_l_date = parse_flexible_date(date_input)
         await state.update_data(last_payment_date=parsed_l_date)
@@ -1964,7 +2075,7 @@ async def process_last_payment(message: types.Message, state: FSMContext):
         
         await message.answer(
             f"✅ Oxirgi to'lov sanasi: <b>{parsed_l_date}</b>\n\n"
-            f"📝 <b>7-Qadam: Keyingi to'lov sanasini tanlang yoki kiriting:</b>\n\n"
+            f"📝 <b>8-Qadam: Keyingi to'lov sanasini tanlang yoki kiriting:</b>\n\n"
             f"<i>(Misol: <code>{next_suggest}</code>)</i>",
             parse_mode="HTML",
             reply_markup=builder.as_markup()
@@ -2463,20 +2574,38 @@ async def process_bot_search_query(message: types.Message, state: FSMContext):
         await message.answer("🤖 <b>Botlarni boshqarish paneli:</b>", reply_markup=get_bot_mgmt_keyboard(lang=lang))
         return
         
-    from database import get_db
+    from database import get_db, sqlite_row_to_dict
     p = await get_db()
-    async with p.acquire() as conn:
+    date_fields = ['last_payment_date', 'next_payment_date']
+    if p.is_sqlite:
         if query.isdigit():
             cid = int(query)
-            clients = await conn.fetch(
-                "SELECT * FROM master_clients WHERE id = $1 OR client_id = $1 OR bot_username ILIKE $2 ORDER BY id ASC;",
-                cid, f"%{query}%"
-            )
+            async with p.sqlite_conn.execute(
+                "SELECT * FROM master_clients WHERE id = ? OR client_id = ? OR bot_username LIKE ? ORDER BY id ASC;",
+                (cid, cid, f"%{query}%")
+            ) as cursor:
+                rows = await cursor.fetchall()
+                clients = [sqlite_row_to_dict(r, date_fields) for r in rows]
         else:
-            clients = await conn.fetch(
-                "SELECT * FROM master_clients WHERE bot_username ILIKE $1 OR bot_token = $2 ORDER BY id ASC;",
-                f"%{query}%", query
-            )
+            async with p.sqlite_conn.execute(
+                "SELECT * FROM master_clients WHERE bot_username LIKE ? OR bot_token = ? ORDER BY id ASC;",
+                (f"%{query}%", query)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                clients = [sqlite_row_to_dict(r, date_fields) for r in rows]
+    else:
+        async with p.pg_pool.acquire() as conn:
+            if query.isdigit():
+                cid = int(query)
+                clients = await conn.fetch(
+                    "SELECT * FROM master_clients WHERE id = $1 OR client_id = $1 OR bot_username ILIKE $2 ORDER BY id ASC;",
+                    cid, f"%{query}%"
+                )
+            else:
+                clients = await conn.fetch(
+                    "SELECT * FROM master_clients WHERE bot_username ILIKE $1 OR bot_token = $2 ORDER BY id ASC;",
+                    f"%{query}%", query
+                )
             
     if not clients:
         await message.answer("❌ <b>Ushbu ma'lumot bo'yicha hech qanday bot topilmadi!</b>\n\nQaytadan boshqa ID yoki username yuborib ko'ring:")
@@ -2719,6 +2848,7 @@ async def process_renew_duration_callback(call: types.CallbackQuery, state: FSMC
         
     total_price = float(client['monthly_price']) * months
     
+    card_num = await get_setting("card_number", "8600 0000 0000 0000")
     await state.update_data(
         renewing_bot_id=bot_id,
         renewing_months=months,
@@ -2726,19 +2856,63 @@ async def process_renew_duration_callback(call: types.CallbackQuery, state: FSMC
         renewing_bot_username=client['bot_username'],
         renewing_bot_token=client['bot_token']
     )
+    await state.set_state(BuyBotState.waiting_for_receipt)
     
-    text = (
-        f"⚙️ <b>Uzaytirish muddati:</b> {months} oy\n"
+    pay_text = (
+        f"💳 <b>KARTA ORQALI TO'LOV (BOTNI UZAYTIRISH)</b>\n\n"
+        f"🤖 <b>Bot:</b> {client['bot_username']}\n"
+        f"⏳ <b>Muddat:</b> {months} oy\n"
         f"💰 <b>Umumiy to'lov:</b> <b>{int(total_price):,} som</b>\n\n"
-        f"To'lov usulini tanlang:"
+        f"💳 <b>Karta raqami:</b>\n"
+        f"<code>{card_num}</code>\n\n"
+        f"📲 Click / Payme / Uzum ilovalari orqali to'lov qiling.\n\n"
+        f"📸 To'lovdan so'ng <b>CHEKINI (skrinshot)</b> rasm yoki hujjat ko'rinishida shu yerga yuboring:"
     )
     
+    lang = await get_user_lang(call.from_user.id)
+    if lang == "ru":
+        pay_text = (
+            f"💳 <b>ОПЛАТА КАРТОЙ (ПРОДЛЕНИЕ БОТА)</b>\n\n"
+            f"🤖 <b>Бот:</b> {client['bot_username']}\n"
+            f"⏳ <b>Срок:</b> {months} мес.\n"
+            f"💰 <b>Общая сумма:</b> <b>{int(total_price):,} сум</b>\n\n"
+            f"💳 <b>Номер карты:</b>\n"
+            f"<code>{card_num}</code>\n\n"
+            f"📲 Произведите оплату на указанную карту.\n\n"
+            f"📸 После оплаты отправьте <b>ЧЕК (скриншот)</b> в виде фото или документа сюда:"
+        )
+        btn_copy_text = "📋 Копировать номер карты"
+    elif lang == "en":
+        pay_text = (
+            f"💳 <b>CARD PAYMENT (BOT RENEWAL)</b>\n\n"
+            f"🤖 <b>Bot:</b> {client['bot_username']}\n"
+            f"⏳ <b>Duration:</b> {months} month(s)\n"
+            f"💰 <b>Total payment:</b> <b>{int(total_price):,} UZS</b>\n\n"
+            f"💳 <b>Card number:</b>\n"
+            f"<code>{card_num}</code>\n\n"
+            f"📲 Make the payment to the specified card.\n\n"
+            f"📸 After payment, send the <b>RECEIPT (screenshot)</b> as a photo or document here:"
+        )
+        btn_copy_text = "📋 Copy card number"
+    else:
+        pay_text = (
+            f"💳 <b>KARTA ORQALI TO'LOV (BOTNI UZAYTIRISH)</b>\n\n"
+            f"🤖 <b>Bot:</b> {client['bot_username']}\n"
+            f"⏳ <b>Muddat:</b> {months} oy\n"
+            f"💰 <b>Umumiy to'lov:</b> <b>{int(total_price):,} som</b>\n\n"
+            f"💳 <b>Karta raqami:</b>\n"
+            f"<code>{card_num}</code>\n\n"
+            f"📲 Yuqoridagi kartaga to'lovni amalga oshiring.\n\n"
+            f"📸 To'lovdan so'ng <b>CHEKINI (skrinshot)</b> rasm yoki hujjat ko'rinishida shu yerga yuboring:"
+        )
+        btn_copy_text = "📋 Kartani nusxalash"
+
     builder = InlineKeyboardBuilder()
-    builder.button(text="💳 Telegram orqali tezkor to'lov (Click/Payme)", callback_data=f"ren_pay:{bot_id}:{months}:telegram")
-    builder.button(text="👤 Karta orqali (Chek yuborish)", callback_data=f"ren_pay:{bot_id}:{months}:card")
-    builder.adjust(1, 1)
+    builder.button(text=btn_copy_text, callback_data=f"copy_card:{card_num}")
     
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+    await call.message.delete()
+    await call.message.answer("❌", reply_markup=get_cancel_keyboard(lang))
+    await call.message.answer(pay_text, parse_mode="HTML", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("ren_pay:"))
 async def process_renew_payment_method_callback(call: types.CallbackQuery, state: FSMContext):
@@ -2913,6 +3087,7 @@ async def check_payments_and_notify():
             client_id = c['client_id']
             bot_un = c['bot_username']
             status = c.get('status', 'active')
+            bot_db_id = c['id']
             
             msg = None
             if rem_days == 3 and status == 'active':
@@ -2942,7 +3117,6 @@ async def check_payments_and_notify():
             elif rem_days < 0 and status == 'active':
                 await update_client_field(c['id'], 'status', 'expired')
                 
-                # Stop the bot service on VPS automatically
                 folder_name = c.get('server_folder', '')
                 if folder_name:
                     await run_vps_command(f"systemctl stop {folder_name}.service")
@@ -2951,27 +3125,25 @@ async def check_payments_and_notify():
                     f"🔴 <b>Botingizning oylik to'lov muddati tugadi va bot to'xtatildi!</b>\n\n"
                     f"🤖 <b>Bot:</b> {bot_un}\n"
                     f"📅 <b>Muddati:</b> {n_date}\n\n"
-                    f"🔄 Botni qayta faollashtirish uchun admin bilan bog'laning yoki to'lov qiling."
+                    f"🔄 Botni qayta faollashtirish uchun to'lov qiling."
                 )
-                for admin_id in ADMINS:
-                    try:
-                        await bot.send_message(
-                            admin_id,
-                            text=f"🚨 <b>Mijoz boti to'lov muddati o'tib ketgani uchun to'xtatildi!</b>\n\n"
-                                 f"🆔 ID: #{c['id']}\n"
-                                 f"👤 Mijoz ID: <code>{client_id}</code>\n"
-                                 f"🤖 Bot: {bot_un}\n"
-                                 f"📅 Muddati: {n_date}",
-                            parse_mode="HTML"
-                        )
-                    except Exception as e:
-                        logging.error(f"Failed to notify admin of expired bot: {e}")
 
             if msg:
+                builder = InlineKeyboardBuilder()
+                builder.button(text="💳 Төлеу (Pay)", callback_data=f"renew_bot:{bot_db_id}")
+                markup = builder.as_markup()
+                
                 try:
-                    await bot.send_message(client_id, text=msg, parse_mode="HTML")
+                    await bot.send_message(client_id, text=msg, parse_mode="HTML", reply_markup=markup)
                 except Exception as e:
                     logging.error(f"Failed to send notification to client {client_id}: {e}")
+
+                for admin_id in ADMINS:
+                    try:
+                        admin_msg = f"🔔 <b>MIJOZ TO'LOVI XABARNOMASI:</b>\n👤 Mijoz: <code>{client_id}</code>\n" + msg
+                        await bot.send_message(admin_id, text=admin_msg, parse_mode="HTML")
+                    except Exception:
+                        pass
     except Exception as e:
         logging.error(f"Error in check_payments_and_notify: {e}")
 
