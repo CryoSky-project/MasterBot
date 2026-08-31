@@ -372,45 +372,101 @@ class AdminMenuState(StatesGroup):
 # ==============================================================================
 # 6-BO'LIM: TUGMA YASOVCHILAR
 # ==============================================================================
-def get_admin_main_keyboard():
+def get_admin_main_keyboard(lang="uz"):
     builder = ReplyKeyboardBuilder()
-    builder.button(text="👤 Mijozlar paneli")
-    builder.button(text="🤖 Botlarni boshqarish")
-    builder.button(text="📊 Statistika")
-    builder.button(text="📢 Reklama tarqatish")
-    builder.button(text="👤 User paneli")
+    if lang == "ru":
+        builder.button(text="👤 Панель клиентов")
+        builder.button(text="🤖 Управление ботами")
+        builder.button(text="📊 Статистика")
+        builder.button(text="📢 Рассылка рекламы")
+        builder.button(text="👤 Юзер панель")
+    elif lang == "en":
+        builder.button(text="👤 Clients Panel")
+        builder.button(text="🤖 Bot Management")
+        builder.button(text="📊 Statistics")
+        builder.button(text="📢 Broadcast Ad")
+        builder.button(text="👤 User Panel")
+    else:
+        builder.button(text="👤 Mijozlar paneli")
+        builder.button(text="🤖 Botlarni boshqarish")
+        builder.button(text="📊 Statistika")
+        builder.button(text="📢 Reklama tarqatish")
+        builder.button(text="👤 User paneli")
     builder.adjust(2, 2, 1)
     return builder.as_markup(resize_keyboard=True)
 
-def get_bot_mgmt_keyboard():
+def get_bot_mgmt_keyboard(lang="uz"):
     builder = ReplyKeyboardBuilder()
-    builder.button(text="🔍 Bot izlash")
-    builder.button(text="📋 Mijoz botlar ro'yxati")
-    builder.button(text="⬅️ Orqaga")
+    if lang == "ru":
+        builder.button(text="🔍 Поиск ботов")
+        builder.button(text="📋 Список клиентских ботов")
+        builder.button(text="⬅️ Назад")
+    elif lang == "en":
+        builder.button(text="🔍 Search Bots")
+        builder.button(text="📋 Client Bot List")
+        builder.button(text="⬅️ Back")
+    else:
+        builder.button(text="🔍 Bot izlash")
+        builder.button(text="📋 Mijoz botlar ro'yxati")
+        builder.button(text="⬅️ Orqaga")
     builder.adjust(2, 1)
     return builder.as_markup(resize_keyboard=True)
 
-def get_clients_panel_keyboard():
+def get_clients_panel_keyboard(lang="uz"):
     builder = ReplyKeyboardBuilder()
-    builder.button(text="➕ Mijoz qo'shish")
-    builder.button(text="📋 Mijozlar ro'yxati")
-    builder.button(text="✏️ Mijoz tahrirlash")
-    builder.button(text="🗑 Mijoz o'chirish")
-    builder.button(text="💳 Karta va Rejimlar")
-    builder.button(text="🔍 Mijoz qidirish")
-    builder.button(text="⬅️ Orqaga")
+    if lang == "ru":
+        builder.button(text="➕ Добавить клиента")
+        builder.button(text="📋 Список клиентов")
+        builder.button(text="✏️ Редактировать клиента")
+        builder.button(text="🗑 Удалить клиента")
+        builder.button(text="💳 Карта и Режимы")
+        builder.button(text="🔍 Поиск клиента")
+        builder.button(text="⬅️ Назад")
+    elif lang == "en":
+        builder.button(text="➕ Add Client")
+        builder.button(text="📋 Client List")
+        builder.button(text="✏️ Edit Client")
+        builder.button(text="🗑 Delete Client")
+        builder.button(text="💳 Card and Modes")
+        builder.button(text="🔍 Search Client")
+        builder.button(text="⬅️ Back")
+    else:
+        builder.button(text="➕ Mijoz qo'shish")
+        builder.button(text="📋 Mijozlar ro'yxati")
+        builder.button(text="✏️ Mijoz tahrirlash")
+        builder.button(text="🗑 Mijoz o'chirish")
+        builder.button(text="💳 Karta va Rejimlar")
+        builder.button(text="🔍 Mijoz qidirish")
+        builder.button(text="⬅️ Orqaga")
     builder.adjust(2, 2, 2, 1)
     return builder.as_markup(resize_keyboard=True)
 
-def get_modes_settings_keyboard():
+def get_modes_settings_keyboard(lang="uz"):
     builder = ReplyKeyboardBuilder()
-    builder.button(text="⚡️ Polling narxini o'zgartirish")
-    builder.button(text="🌐 Webhook narxini o'zgartirish")
-    builder.button(text="🤖 Bot narxini o'zgartirish")
-    builder.button(text="💳 Karta raqamini o'zgartirish")
-    builder.button(text="💳 Telegram to'lov tokenini o'zgartirish")
-    builder.button(text="🤖 Auto Bot Yaratish")
-    builder.button(text="⬅️ Orqaga")
+    if lang == "ru":
+        builder.button(text="⚡️ Изменить цену Polling")
+        builder.button(text="🌐 Изменить цену Webhook")
+        builder.button(text="🤖 Изменить цену бота")
+        builder.button(text="💳 Изменить номер карты")
+        builder.button(text="💳 Изменить платежный токен Telegram")
+        builder.button(text="🤖 Авто-создание ботов")
+        builder.button(text="⬅️ Назад")
+    elif lang == "en":
+        builder.button(text="⚡️ Change Polling Price")
+        builder.button(text="🌐 Change Webhook Price")
+        builder.button(text="🤖 Change Bot Price")
+        builder.button(text="💳 Change Card Number")
+        builder.button(text="💳 Change Telegram Payment Token")
+        builder.button(text="🤖 Auto Bot Creation")
+        builder.button(text="⬅️ Back")
+    else:
+        builder.button(text="⚡️ Polling narxini o'zgartirish")
+        builder.button(text="🌐 Webhook narxini o'zgartirish")
+        builder.button(text="🤖 Bot narxini o'zgartirish")
+        builder.button(text="💳 Karta raqamini o'zgartirish")
+        builder.button(text="💳 Telegram to'lov tokenini o'zgartirish")
+        builder.button(text="🤖 Auto Bot Yaratish")
+        builder.button(text="⬅️ Orqaga")
     builder.adjust(2, 2, 2, 1)
     return builder.as_markup(resize_keyboard=True)
 
@@ -542,15 +598,14 @@ async def cmd_start(message: types.Message, state: FSMContext):
     
     await add_user(user_id, username, full_name)
     
-    await message.answer(
-        "🌎 Iltimos, tilni tanlang / Пожалуйста, выберите язык / Please choose a language:",
-        reply_markup=get_lang_keyboard()
-    )
+    lang = await get_user_lang(user_id)
+    await show_main_menu_by_lang(message, user_id, lang)
 
 @dp.message(F.text.in_(["❌ Bekor qilish", "❌ Отмена", "❌ Cancel"]))
 async def cancel_any_action(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     user_id = message.from_user.id
+    lang = await get_user_lang(user_id)
     
     if user_id in ADMINS:
         if current_state and ("SettingState" in current_state):
@@ -561,10 +616,10 @@ async def cancel_any_action(message: types.Message, state: FSMContext):
             await admin_switch_to_user_panel(message, state)
         elif current_state and ("BroadcastState" in current_state):
             await state.clear()
-            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard())
+            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
         elif current_state and ("AdminOrderActionState" in current_state):
             await state.clear()
-            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard())
+            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
         else:
             await state.clear()
             await clients_panel_handler(message, state)
@@ -576,16 +631,17 @@ async def cancel_any_action(message: types.Message, state: FSMContext):
 async def back_to_previous_menu(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     user_id = message.from_user.id
+    lang = await get_user_lang(user_id)
     
     if user_id in ADMINS:
         if current_state == AdminMenuState.in_modes_panel.state:
             await clients_panel_handler(message, state)
         elif current_state == AdminMenuState.in_clients_panel.state:
             await state.clear()
-            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard())
+            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
         elif current_state == AdminMenuState.in_user_panel.state:
             await state.clear()
-            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard())
+            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
         elif current_state and ("SettingState" in current_state):
             await modes_panel_handler(message, state)
         elif current_state and any(s in current_state for s in ["AddClientState", "EditClientState", "DeleteClientState", "SearchClientState"]):
@@ -594,61 +650,64 @@ async def back_to_previous_menu(message: types.Message, state: FSMContext):
             await admin_switch_to_user_panel(message, state)
         elif current_state and ("BroadcastState" in current_state):
             await state.clear()
-            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard())
+            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
         elif current_state and ("AdminOrderActionState" in current_state):
             await state.clear()
-            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard())
+            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
         elif current_state and ("BotMgmtState" in current_state):
             if current_state == BotMgmtState.waiting_for_search_query.state:
                 await state.set_state(BotMgmtState.in_bot_panel)
-                await message.answer("🤖 <b>Botlarni boshqarish paneli:</b>", parse_mode="HTML", reply_markup=get_bot_mgmt_keyboard())
+                await message.answer("🤖 <b>Botlarni boshqarish paneli:</b>", parse_mode="HTML", reply_markup=get_bot_mgmt_keyboard(lang=lang))
             else:
                 await state.clear()
-                await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard())
+                await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
         else:
             await state.clear()
-            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard())
+            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
     else:
         await state.clear()
         await cmd_start(message, state)
 
-@dp.message(F.text == "👤 User paneli")
+@dp.message(F.text.in_(["👤 User paneli", "👤 Панель пользователя", "👤 User Panel"]))
 async def admin_switch_to_user_panel(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMINS:
         return
     await state.set_state(AdminMenuState.in_user_panel)
+    lang = await get_user_lang(message.from_user.id)
     user_text = (
         f"👤 <b>Foydalanuvchi paneli (User Panel)</b>\n\n"
         f"Siz hozir foydalanuvchi rejimidasiz. Barcha funksiyalarni tekshirishingiz mumkin.\n"
         f"Qaytish uchun pastdagi <b>👑 Admin paneli</b> tugmasini bosing."
     )
-    await message.answer(user_text, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=True))
+    await message.answer(user_text, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=True, lang=lang))
 
 @dp.message(F.text.in_(["👑 Admin paneli", "👑 Админ панель", "👑 Admin Panel"]))
 async def admin_switch_to_admin_panel(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMINS:
         return
     await state.clear()
+    lang = await get_user_lang(message.from_user.id)
     admin_text = (
         f"👑 <b>SKY MASTER BOT - Boshqaruv Paneli</b>\n\n"
         f"Quyidagi bo'limlardan birini tanlang:"
     )
-    await message.answer(admin_text, parse_mode="HTML", reply_markup=get_admin_main_keyboard())
+    await message.answer(admin_text, parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
 
 # ==============================================================================
 # 8-BO'LIM: XABAR TARQATISH TIZIMI
 # ==============================================================================
-@dp.message(F.text == "📢 Reklama tarqatish")
+@dp.message(F.text.in_(["📢 Reklama tarqatish", "📢 Рассылка рекламы", "📢 Broadcast Ad"]))
 async def start_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMINS:
         return
     await state.set_state(BroadcastState.waiting_for_message)
+    lang = await get_user_lang(message.from_user.id)
     await message.answer(
         "📢 <b>Barcha foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yuboring:</b>\n\n"
         "<i>Bu xabar matn, rasm, video, audio yoki hujjat bo'lika bo'lishi mumkin. "
         "Barcha foydalanuvchilarga aynan o'zi yuboriladi.</i>",
         parse_mode="HTML",
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_cancel_keyboard(lang=lang)
     )
 
 @dp.message(BroadcastState.waiting_for_message)
@@ -709,22 +768,24 @@ async def client_guide_info(message: types.Message):
 # ==============================================================================
 # 10-BO'LIM: ADMIN SOZLAMALARI VA PANEL NAVIGATSIYASI
 # ==============================================================================
-@dp.message(F.text == "👤 Mijozlar paneli")
+@dp.message(F.text.in_(["👤 Mijozlar paneli", "👤 Панель клиентов", "👤 Clients Panel"]))
 async def clients_panel_handler(message: types.Message, state: FSMContext):
     """Adminlarga mijozlarni boshqarish panelini ko'rsatish."""
     if message.from_user.id not in ADMINS:
         return
     await state.clear()
     await state.set_state(AdminMenuState.in_clients_panel)
-    await message.answer("👤 <b>Mijozlarni boshqarish paneli:</b>", parse_mode="HTML", reply_markup=get_clients_panel_keyboard())
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer("👤 <b>Mijozlarni boshqarish paneli:</b>", parse_mode="HTML", reply_markup=get_clients_panel_keyboard(lang=lang))
 
-@dp.message(F.text == "💳 Karta va Rejimlar")
+@dp.message(F.text.in_(["💳 Karta va Rejimlar", "💳 Карта и Режимы", "💳 Card and Modes"]))
 async def modes_panel_handler(message: types.Message, state: FSMContext):
     """Adminlarga joriy tizim narxlari konfiguratsiyasini va karta ma'lumotlarini ko'rsatish."""
     if message.from_user.id not in ADMINS:
         return
     await state.clear()
     await state.set_state(AdminMenuState.in_modes_panel)
+    lang = await get_user_lang(message.from_user.id)
     poll_price = await get_setting("polling_price", "20000")
     web_price = await get_setting("webhook_price", "25000")
     bot_sale_p = await get_setting("bot_sale_price", "60000")
@@ -745,9 +806,9 @@ async def modes_panel_handler(message: types.Message, state: FSMContext):
         f"🤖 <b>Auto Bot Yaratish:</b> {auto_create_status}\n\n"
         f"O'zgartirish uchun quyidagi tugmalardan birini bosing:"
     )
-    await message.answer(text, parse_mode="HTML", reply_markup=get_modes_settings_keyboard())
+    await message.answer(text, parse_mode="HTML", reply_markup=get_modes_settings_keyboard(lang=lang))
 
-@dp.message(F.text == "🤖 Auto Bot Yaratish")
+@dp.message(F.text.in_(["🤖 Auto Bot Yaratish", "🤖 Авто-создание ботов", "🤖 Auto Bot Creation"]))
 async def toggle_auto_create_bot(message: types.Message, state: FSMContext):
     """Avtomatik bot yaratish tizimini yoqish/o'chirish."""
     if message.from_user.id not in ADMINS:
@@ -761,13 +822,14 @@ async def toggle_auto_create_bot(message: types.Message, state: FSMContext):
     await message.answer(f"✅ <b>Avtomatik bot yaratish tizimi {status_text}!</b>", parse_mode="HTML")
     await modes_panel_handler(message, state)
 
-@dp.message(F.text == "⚡️ Polling narxini o'zgartirish")
+@dp.message(F.text.in_(["⚡️ Polling narxini o'zgartirish", "⚡️ Изменить цену Polling", "⚡️ Change Polling Price"]))
 async def set_poll_price_start(message: types.Message, state: FSMContext):
     """Polling rejimi narxini yangilash jarayonini boshlash."""
     if message.from_user.id not in ADMINS:
         return
+    lang = await get_user_lang(message.from_user.id)
     await state.set_state(SettingState.waiting_for_polling_price)
-    await message.answer("⚡️ <b>Polling rejimi uchun yangi oylik narxni kiriting (somda):</b>\n\n<i>(Misol: 15000)</i>", parse_mode="HTML", reply_markup=get_cancel_keyboard())
+    await message.answer("⚡️ <b>Polling rejimi uchun yangi oylik narxni kiriting (somda):</b>\n\n<i>(Misol: 15000)</i>", parse_mode="HTML", reply_markup=get_cancel_keyboard(lang=lang))
 
 @dp.message(SettingState.waiting_for_polling_price)
 async def process_poll_price(message: types.Message, state: FSMContext):
@@ -781,17 +843,19 @@ async def process_poll_price(message: types.Message, state: FSMContext):
         val = int(text)
         await set_setting("polling_price", str(val))
         await state.clear()
-        await message.answer(f"✅ Polling narxi <b>{val:,} som</b> deb yangilandi!", parse_mode="HTML", reply_markup=get_modes_settings_keyboard())
+        lang = await get_user_lang(message.from_user.id)
+        await message.answer(f"✅ Polling narxi <b>{val:,} som</b> deb yangilandi!", parse_mode="HTML", reply_markup=get_modes_settings_keyboard(lang=lang))
     except ValueError:
         await message.answer("❌ Noto'g'ri narx. Faqat son kiriting (Masalan: 15000):")
 
-@dp.message(F.text == "🌐 Webhook narxini o'zgartirish")
+@dp.message(F.text.in_(["🌐 Webhook narxini o'zgartirish", "🌐 Изменить цену Webhook", "🌐 Change Webhook Price"]))
 async def set_web_price_start(message: types.Message, state: FSMContext):
     """Webhook rejimi narxini yangilash jarayonini boshlash."""
     if message.from_user.id not in ADMINS:
         return
+    lang = await get_user_lang(message.from_user.id)
     await state.set_state(SettingState.waiting_for_webhook_price)
-    await message.answer("🌐 <b>Webhook rejimi uchun yangi oylik narxni kiriting (somda):</b>\n\n<i>(Misol: 20000)</i>", parse_mode="HTML", reply_markup=get_cancel_keyboard())
+    await message.answer("🌐 <b>Webhook rejimi uchun yangi oylik narxni kiriting (somda):</b>\n\n<i>(Misol: 20000)</i>", parse_mode="HTML", reply_markup=get_cancel_keyboard(lang=lang))
 
 @dp.message(SettingState.waiting_for_webhook_price)
 async def process_web_price(message: types.Message, state: FSMContext):
@@ -805,17 +869,19 @@ async def process_web_price(message: types.Message, state: FSMContext):
         val = int(text)
         await set_setting("webhook_price", str(val))
         await state.clear()
-        await message.answer(f"✅ Webhook narxi <b>{val:,} som</b> deb yangilandi!", parse_mode="HTML", reply_markup=get_modes_settings_keyboard())
+        lang = await get_user_lang(message.from_user.id)
+        await message.answer(f"✅ Webhook narxi <b>{val:,} som</b> deb yangilandi!", parse_mode="HTML", reply_markup=get_modes_settings_keyboard(lang=lang))
     except ValueError:
         await message.answer("❌ Noto'g'ri narx. Faqat son kiriting (Masalan: 20000):")
 
-@dp.message(F.text == "🤖 Bot narxini o'zgartirish")
+@dp.message(F.text.in_(["🤖 Bot narxini o'zgartirish", "🤖 Изменить цену бота", "🤖 Change Bot Price"]))
 async def set_bot_sale_price_start(message: types.Message, state: FSMContext):
     """Bot sotuv narxini yangilash jarayonini boshlash."""
     if message.from_user.id not in ADMINS:
         return
+    lang = await get_user_lang(message.from_user.id)
     await state.set_state(SettingState.waiting_for_bot_sale_price)
-    await message.answer("🤖 <b>Bot sotuv narxini kiriting (somda):</b>\n\n<i>(Misol: 60000)</i>", parse_mode="HTML", reply_markup=get_cancel_keyboard())
+    await message.answer("🤖 <b>Bot sotuv narxini kiriting (somda):</b>\n\n<i>(Misol: 60000)</i>", parse_mode="HTML", reply_markup=get_cancel_keyboard(lang=lang))
 
 @dp.message(SettingState.waiting_for_bot_sale_price)
 async def process_bot_sale_price(message: types.Message, state: FSMContext):
@@ -829,17 +895,19 @@ async def process_bot_sale_price(message: types.Message, state: FSMContext):
         val = int(text)
         await set_setting("bot_sale_price", str(val))
         await state.clear()
-        await message.answer(f"✅ Bot sotuv narxi <b>{val:,} som</b> deb yangilandi!", parse_mode="HTML", reply_markup=get_modes_settings_keyboard())
+        lang = await get_user_lang(message.from_user.id)
+        await message.answer(f"✅ Bot sotuv narxi <b>{val:,} som</b> deb yangilandi!", parse_mode="HTML", reply_markup=get_modes_settings_keyboard(lang=lang))
     except ValueError:
         await message.answer("❌ Noto'g'ri narx. Faqat son kiriting (Masalan: 60000):")
 
-@dp.message(F.text == "💳 Karta raqamini o'zgartirish")
+@dp.message(F.text.in_(["💳 Karta raqamini o'zgartirish", "💳 Изменить номер карты", "💳 Change Card Number"]))
 async def set_card_start(message: types.Message, state: FSMContext):
     """Karta raqamini yangilash jarayonini boshlash."""
     if message.from_user.id not in ADMINS:
         return
+    lang = await get_user_lang(message.from_user.id)
     await state.set_state(SettingState.waiting_for_card_number)
-    await message.answer("💳 <b>Yangi karta raqamini kiriting:</b>\n\n<i>(Misol: 8600 1234 5678 9012)</i>", parse_mode="HTML", reply_markup=get_cancel_keyboard())
+    await message.answer("💳 <b>Yangi karta raqamini kiriting:</b>\n\n<i>(Misol: 8600 1234 5678 9012)</i>", parse_mode="HTML", reply_markup=get_cancel_keyboard(lang=lang))
 
 @dp.message(SettingState.waiting_for_card_number)
 async def process_card(message: types.Message, state: FSMContext):
@@ -851,20 +919,22 @@ async def process_card(message: types.Message, state: FSMContext):
  
     await set_setting("card_number", text)
     await state.clear()
-    await message.answer(f"✅ Karta raqami <code>{text}</code> deb yangilandi!", parse_mode="HTML", reply_markup=get_modes_settings_keyboard())
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(f"✅ Karta raqami <code>{text}</code> deb yangilandi!", parse_mode="HTML", reply_markup=get_modes_settings_keyboard(lang=lang))
 
-@dp.message(F.text == "💳 Telegram to'lov tokenini o'zgartirish")
+@dp.message(F.text.in_(["💳 Telegram to'lov tokenini o'zgartirish", "💳 Изменить платежный токен Telegram", "💳 Change Telegram Payment Token"]))
 async def set_provider_token_start(message: types.Message, state: FSMContext):
     """Telegram Payments provayder tokenini yangilash jarayonini boshlash."""
     if message.from_user.id not in ADMINS:
         return
+    lang = await get_user_lang(message.from_user.id)
     await state.set_state(SettingState.waiting_for_provider_token)
     await message.answer(
         "🔑 <b>Telegram Payments uchun Provider Token-ni kiriting:</b>\n\n"
         "<i>(BotFather -> Bot Settings -> Payments -> Click yoki Payme orqali olingan token)\n"
         "Misol: <code>390234567:TEST:98452</code></i>",
         parse_mode="HTML",
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_cancel_keyboard(lang=lang)
     )
 
 @dp.message(SettingState.waiting_for_provider_token)
@@ -877,7 +947,8 @@ async def process_provider_token(message: types.Message, state: FSMContext):
  
     await set_setting("provider_token", text)
     await state.clear()
-    await message.answer("✅ Telegram to'lov tokeni muvaffaqiyatli yangilandi!", parse_mode="HTML", reply_markup=get_modes_settings_keyboard())
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer("✅ Telegram to'lov tokeni muvaffaqiyatli yangilandi!", parse_mode="HTML", reply_markup=get_modes_settings_keyboard(lang=lang))
 
 # ==============================================================================
 # 11-BO'LIM: FOYDALANUVCHILAR UCHUN BOT DO'KONI VA BUYURTMA BERISH
@@ -1695,17 +1766,18 @@ async def admin_save_reject_reason(message: types.Message, state: FSMContext):
 # ==============================================================================
 # 16-BO'LIM: ADMIN TOMONIDAN MIJOZ QO'SHISH JARAYONI
 # ==============================================================================
-@dp.message(F.text == "➕ Mijoz qo'shish")
+@dp.message(F.text.in_(["➕ Mijoz qo'shish", "➕ Добавить клиента", "➕ Add Client"]))
 async def start_add_client(message: types.Message, state: FSMContext):
     """Qo'lda mijoz qo'shish jarayonini boshlash."""
     if message.from_user.id not in ADMINS:
         return
     await state.set_state(AddClientState.waiting_for_client_id)
+    lang = await get_user_lang(message.from_user.id)
     await message.answer(
         "📝 <b>1-Qadam: Mijozning Telegram ID-sini kiriting:</b>\n\n"
         "<i>(Misol: 8551089366)</i>",
         parse_mode="HTML",
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_cancel_keyboard(lang=lang)
     )
 
 @dp.message(AddClientState.waiting_for_client_id)
@@ -1994,7 +2066,8 @@ async def save_client_final_callback(call: types.CallbackQuery, state: FSMContex
         f"⏳ <b>Keyingi to'lov:</b> <b>{n_date}</b>"
     )
     await call.message.edit_text(success_text, parse_mode="HTML")
-    await call.message.answer("👤 <b>Mijozlar paneli:</b>", reply_markup=get_clients_panel_keyboard())
+    lang = await get_user_lang(call.from_user.id)
+    await call.message.answer("👤 <b>Mijozlar paneli:</b>", reply_markup=get_clients_panel_keyboard(lang=lang))
 
 @dp.callback_query(F.data == "cancel_client_final")
 async def cancel_client_final_callback(call: types.CallbackQuery, state: FSMContext):
@@ -2002,19 +2075,21 @@ async def cancel_client_final_callback(call: types.CallbackQuery, state: FSMCont
     await call.answer()
     await state.clear()
     await call.message.edit_text("❌ <b>Saqlash bekor qilindi.</b>", parse_mode="HTML")
-    await call.message.answer("👤 <b>Mijozlar paneli:</b>", reply_markup=get_clients_panel_keyboard())
+    lang = await get_user_lang(call.from_user.id)
+    await call.message.answer("👤 <b>Mijozlar paneli:</b>", reply_markup=get_clients_panel_keyboard(lang=lang))
 
 # ==============================================================================
 # 17-BO'LIM: ADMIN TOMONIDAN MIJOZLAR RO'YXATINI KO'RISH VA QIDIRISH
 # ==============================================================================
-@dp.message(F.text == "📋 Mijozlar ro'yxati")
+@dp.message(F.text.in_(["📋 Mijozlar ro'yxati", "📋 Список клиентов", "📋 Client List"]))
 async def list_clients(message: types.Message):
     """Barcha sozlangan mijoz botlari ro'yxatini olish va ko'rsatish."""
     if message.from_user.id not in ADMINS:
         return
     clients = await get_all_clients()
+    lang = await get_user_lang(message.from_user.id)
     if not clients:
-        await message.answer("📭 Hozircha mijozlar ro'yxati bo'sh.", reply_markup=get_clients_panel_keyboard())
+        await message.answer("📭 Hozircha mijozlar ro'yxati bo'sh.", reply_markup=get_clients_panel_keyboard(lang=lang))
         return
 
     text = f"📋 <b>Barcha Mijozlar va Botlar Ro'yxati ({len(clients)} ta):</b>\n\n"
@@ -2036,20 +2111,21 @@ async def list_clients(message: types.Message):
             f"⏳ <b>Keyingi to'lov:</b> <b>{n_date}</b> (<i>{rem_days} kun qoldi</i>)\n"
             f"────────────────────\n"
         )
-    await message.answer(text, parse_mode="HTML", reply_markup=get_clients_panel_keyboard())
+    await message.answer(text, parse_mode="HTML", reply_markup=get_clients_panel_keyboard(lang=lang))
 
-@dp.message(F.text == "🔍 Mijoz qidirish")
+@dp.message(F.text.in_(["🔍 Mijoz qidirish", "🔍 Поиск клиента", "🔍 Search Client"]))
 async def start_search_client(message: types.Message, state: FSMContext):
     """Mijoz botini qidirish jarayonini boshlash."""
     if message.from_user.id not in ADMINS:
         return
     await state.set_state(SearchClientState.waiting_for_query)
+    lang = await get_user_lang(message.from_user.id)
     await message.answer(
         "🔍 <b>Mijoz qidirish:</b>\n\n"
         "Qidirilayotgan mijozning <b>Telegram ID-sini</b> yoki <b>Bot Username-ini</b> yuboring:\n"
         "<i>(Masalan: 8551089366 yoki @Anime_Uz_Bot)</i>",
         parse_mode="HTML",
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_cancel_keyboard(lang=lang)
     )
 
 @dp.message(SearchClientState.waiting_for_query)
@@ -2061,13 +2137,14 @@ async def process_search_client(message: types.Message, state: FSMContext):
         return
 
     results = await search_clients(query)
+    lang = await get_user_lang(message.from_user.id)
     
     if not results:
         await message.answer(
             f"❌ <b>'{query}' bo'yicha hech qanday mijoz topilmadi!</b>\n\n"
             f"Qaytadan boshqa ID yoki Username yuboring yoki bekor qilish uchun <b>❌ Bekor qilish</b> tugmasini bosing:",
             parse_mode="HTML",
-            reply_markup=get_cancel_keyboard()
+            reply_markup=get_cancel_keyboard(lang=lang)
         )
         return
 
@@ -2092,21 +2169,22 @@ async def process_search_client(message: types.Message, state: FSMContext):
             f"⏳ <b>Keyingi to'lov:</b> <b>{n_date}</b> (<i>{rem_days} kun qoldi</i>)\n"
             f"────────────────────\n"
         )
-    await message.answer(text, parse_mode="HTML", reply_markup=get_clients_panel_keyboard())
+    await message.answer(text, parse_mode="HTML", reply_markup=get_clients_panel_keyboard(lang=lang))
 
 # ==============================================================================
 # 18-BO'LIM: ADMIN TOMONIDAN MIJOZNING O'CHIRILISHI VA TAHRIRLANISHI
 # ==============================================================================
-@dp.message(F.text == "🗑 Mijoz o'chirish")
+@dp.message(F.text.in_(["🗑 Mijoz o'chirish", "🗑 Удалить клиента", "🗑 Delete Client"]))
 async def start_delete_client(message: types.Message, state: FSMContext):
     """Qo'lda mijozni o'chirish jarayonini boshlash."""
     if message.from_user.id not in ADMINS:
         return
     await state.set_state(DeleteClientState.waiting_for_record_id)
+    lang = await get_user_lang(message.from_user.id)
     await message.answer(
         "🗑 <b>O'chirmoqchi bo'lgan botning Ro'yxat ID raqamini kiriting:</b>\n\n<i>(Masalan: 1)</i>",
         parse_mode="HTML",
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_cancel_keyboard(lang=lang)
     )
 
 @dp.message(DeleteClientState.waiting_for_record_id)
@@ -2153,16 +2231,17 @@ async def cancel_delete_client(call: types.CallbackQuery):
     await call.answer()
     await call.message.edit_text("❌ <b>O'chirish bekor qilindi.</b>", parse_mode="HTML")
 
-@dp.message(F.text == "✏️ Mijoz tahrirlash")
+@dp.message(F.text.in_(["✏️ Mijoz tahrirlash", "✏️ Редактировать клиента", "✏️ Edit Client"]))
 async def start_edit_client(message: types.Message, state: FSMContext):
     """Mijozni tahrirlash jarayonini boshlash."""
     if message.from_user.id not in ADMINS:
         return
     await state.set_state(EditClientState.waiting_for_record_id)
+    lang = await get_user_lang(message.from_user.id)
     await message.answer(
         "✏️ <b>Tahrirlamoqchi bo'lgan botning Ro'yxat ID raqamini kiriting:</b>\n\n<i>(Masalan: 1)</i>",
         parse_mode="HTML",
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_cancel_keyboard(lang=lang)
     )
 
 @dp.message(EditClientState.waiting_for_record_id)
@@ -2302,27 +2381,29 @@ async def apply_edit_value(message: types.Message, state: FSMContext):
 # ==============================================================================
 # 18b-BO'LIM: ADMIN TOMONIDAN MIJOZ BOTLARINI TIZIM ORQALI BOSHQARISH
 # ==============================================================================
-@dp.message(F.text == "🤖 Botlarni boshqarish")
+@dp.message(F.text.in_(["🤖 Botlarni boshqarish", "🤖 Управление ботами", "🤖 Bot Management"]))
 async def start_bot_management_panel(message: types.Message, state: FSMContext):
     """Admin botlarni boshqarish paneli."""
     if message.from_user.id not in ADMINS:
         return
     await state.set_state(BotMgmtState.in_bot_panel)
+    lang = await get_user_lang(message.from_user.id)
     await message.answer(
         "🤖 <b>Botlarni boshqarish paneli (systemctl service):</b>\n\n"
         "Ushbu bo'lim orqali siz mijoz botlarini qidirishingiz, ularning holatini "
         "ko'rishingiz (ishlayaptimi yoki yo'q) va serverdagi systemd xizmatini "
         "boshqarishingiz (Start/Stop/Restart) mumkin.",
         parse_mode="HTML",
-        reply_markup=get_bot_mgmt_keyboard()
+        reply_markup=get_bot_mgmt_keyboard(lang=lang)
     )
 
-@dp.message(BotMgmtState.in_bot_panel, F.text == "🔍 Bot izlash")
+@dp.message(BotMgmtState.in_bot_panel, F.text.in_(["🔍 Bot izlash", "🔍 Поиск ботов", "🔍 Search Bots"]))
 async def prompt_bot_search(message: types.Message, state: FSMContext):
     """Bot qidirish so'rovini yuborishni so'rash."""
     if message.from_user.id not in ADMINS:
         return
     await state.set_state(BotMgmtState.waiting_for_search_query)
+    lang = await get_user_lang(message.from_user.id)
     await message.answer(
         "🔍 <b>Botni qidirish uchun uning ma'lumotlarini yuboring:</b>\n\n"
         "Tizimda botni topish uchun quyidagilardan birini yuborishingiz mumkin:\n"
@@ -2332,17 +2413,18 @@ async def prompt_bot_search(message: types.Message, state: FSMContext):
         "• Tizimdagi <b>Ro'yxat ID-si</b> (masalan: 1)\n\n"
         "<i>Eslatma: Faqat ID yuborish orqali qidirishingiz tavsiya etiladi.</i>",
         parse_mode="HTML",
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_cancel_keyboard(lang=lang)
     )
 
-@dp.message(BotMgmtState.in_bot_panel, F.text == "📋 Mijoz botlar ro'yxati")
+@dp.message(BotMgmtState.in_bot_panel, F.text.in_(["📋 Mijoz botlar ro'yxati", "📋 Список клиентских ботов", "📋 Client Bot List"]))
 async def list_bot_management(message: types.Message):
     """Barcha mijoz botlarini boshqarish tugmalari bilan ko'rsatish."""
     if message.from_user.id not in ADMINS:
         return
     clients = await get_all_clients()
+    lang = await get_user_lang(message.from_user.id)
     if not clients:
-        await message.answer("📭 Hozircha mijoz botlar ro'yxati bo'sh.", reply_markup=get_bot_mgmt_keyboard())
+        await message.answer("📭 Hozircha mijoz botlar ro'yxati bo'sh.", reply_markup=get_bot_mgmt_keyboard(lang=lang))
         return
         
     text = f"📋 <b>Barcha Mijoz Botlari Ro'yxati ({len(clients)} ta):</b>\n\n"
@@ -2770,7 +2852,7 @@ async def client_contact(message: types.Message):
         parse_mode="HTML"
     )
 
-@dp.message(F.text == "📊 Statistika")
+@dp.message(F.text.in_(["📊 Statistika", "📊 Статистика", "📊 Statistics"]))
 async def admin_stats(message: types.Message):
     """Admin uchun umumiy tizim ko'rsatkichlari va to'lov statistikasini ko'rsatish."""
     if message.from_user.id not in ADMINS:
