@@ -163,8 +163,8 @@ async def deploy_bot_task(order_id: int, user_id: int, bot_username: str, bot_to
         # 9. Save bot to master_clients database
         today_str = datetime.now().strftime("%Y-%m-%d")
         next_str = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-        poll_p = float(await get_setting("polling_price", "20000"))
-        web_p = float(await get_setting("webhook_price", "25000"))
+        poll_p = safe_int(await get_setting("polling_price", "20000"))
+        web_p = safe_int(await get_setting("webhook_price", "25000"))
         m_price = poll_p if mode == "polling" else web_p
         
         rec_id = await add_client_bot(
@@ -246,6 +246,18 @@ def is_menu_button_or_command(text: str) -> bool:
 # ==============================================================================
 # 4-BO'LIM: YORDAMCHI FUNKSIYALAR VA API TEKSHIRUVLARI
 # ==============================================================================
+def safe_int(val, default=0) -> int:
+    """Settings qiymatlarini xavfsiz int-ga aylantirish (xatoliklardan saqlaydi) (o'zbekcha sharh)."""
+    if val is None:
+        return default
+    try:
+        cleaned = re.sub(r'[^\d\.]', '', str(val))
+        if not cleaned:
+            return default
+        return int(float(cleaned))
+    except Exception:
+        return default
+
 def parse_flexible_date(date_str: str) -> str:
     """Moslashuvchan sana matnlarini (masalan, YYYYMMDD, YYYY.MM.DD) YYYY-MM-DD formatiga o'tkazish."""
     date_str = date_str.strip()
@@ -798,9 +810,9 @@ async def modes_panel_handler(message: types.Message, state: FSMContext):
     
     text = (
         f"💳 <b>Karta va Rejimlar Narxlari:</b>\n\n"
-        f"🤖 <b>Bot sotuv narxi:</b> {int(float(bot_sale_p)):,} som\n"
-        f"⚡️ <b>Polling rejimi narxi:</b> {int(float(poll_price)):,} som / oy\n"
-        f"🌐 <b>Webhook rejimi narxi:</b> {int(float(web_price)):,} som / oy\n"
+        f"🤖 <b>Bot sotuv narxi:</b> {safe_int(bot_sale_p):,} som\n"
+        f"⚡️ <b>Polling rejimi narxi:</b> {safe_int(poll_price):,} som / oy\n"
+        f"🌐 <b>Webhook rejimi narxi:</b> {safe_int(web_price):,} som / oy\n"
         f"💳 <b>Karta raqami:</b> <code>{card_num}</code>\n"
         f"🔑 <b>Telegram to'lov tokeni:</b> {prov_tok_status}\n"
         f"🤖 <b>Auto Bot Yaratish:</b> {auto_create_status}\n\n"
@@ -992,6 +1004,7 @@ async def start_buy_bot_shop(message: types.Message, state: FSMContext):
 async def process_bot_type_callback(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
     choice = call.data.split(":")[1]
+    lang = await get_user_lang(call.from_user.id)
     
     if choice == "boshqa":
         await state.set_state(BuyBotState.waiting_for_boshqa_desc)
@@ -999,13 +1012,13 @@ async def process_bot_type_callback(call: types.CallbackQuery, state: FSMContext
             "📝 <b>O'zingizga kerak bo'lgan botni batafsil tavsiflab (tushuntirib) bering:</b>",
             parse_mode="HTML"
         )
-        await call.message.answer("Bekor qilish uchun tugmani bosing:", reply_markup=get_cancel_keyboard())
+        await call.message.answer("Bekor qilish uchun tugmani bosing:", reply_markup=get_cancel_keyboard(lang=lang))
     else:
         bot_sale_p = await get_setting("bot_sale_price", "60000")
         text = (
             f"🤖 <b>ANIME BOT</b>\n\n"
             f"Hozirgi kunda eng yaxshi va yangi versiyadagi Anime Botimiz narxi:\n"
-            f"💰 <b>{int(float(bot_sale_p)):,} som</b> <i>(1 martalik sozlash)</i>"
+            f"💰 <b>{safe_int(bot_sale_p):,} som</b> <i>(1 martalik sozlash)</i>"
         )
         
         builder = InlineKeyboardBuilder()
@@ -1035,10 +1048,11 @@ async def process_boshqa_description(message: types.Message, state: FSMContext):
         except Exception:
             pass
             
+    lang = await get_user_lang(message.from_user.id)
     await message.answer(
         "✅ <b>So'rovingiz qabul qilindi!</b>\n\nSizning so'rovingiz adminga yuborildi. Tez orada adminlarimiz siz bilan bog'lanishadi.",
         parse_mode="HTML",
-        reply_markup=get_client_user_keyboard(is_admin=(message.from_user.id in ADMINS))
+        reply_markup=get_client_user_keyboard(is_admin=(message.from_user.id in ADMINS), lang=lang)
     )
 
 @dp.callback_query(F.data == "anime_next")
@@ -1052,13 +1066,13 @@ async def anime_bot_next_callback(call: types.CallbackQuery, state: FSMContext):
     text = (
         f"⚙️ <b>SERVER UCHUN OYLIK TO'LOV</b>\n\n"
         f"Bot serverda 24/7 uzluksiz ishlashi uchun oylik to'lov talab qilinadi. Quyidagi 2 xil to'lov rejimidan birini tanlang:\n\n"
-        f"⚡️ <b>Polling rejimi:</b> {int(float(poll_p)):,} som / oy\n"
-        f"🌐 <b>Webhook rejimi:</b> {int(float(web_p)):,} som / oy"
+        f"⚡️ <b>Polling rejimi:</b> {safe_int(poll_p):,} som / oy\n"
+        f"🌐 <b>Webhook rejimi:</b> {safe_int(web_p):,} som / oy"
     )
     
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"⚡️ Polling ({int(float(poll_p)):,} som/oy)", callback_data="buy_mode:polling")
-    builder.button(text=f"🌐 Webhook ({int(float(web_p)):,} som/oy)", callback_data="buy_mode:webhook")
+    builder.button(text=f"⚡️ Polling ({safe_int(poll_p):,} som/oy)", callback_data="buy_mode:polling")
+    builder.button(text=f"🌐 Webhook ({safe_int(web_p):,} som/oy)", callback_data="buy_mode:webhook")
     builder.button(text="❓ Oylik to'lov nima?", callback_data="explain_monthly")
     builder.button(text="❓ Webhook va Polling nima?", callback_data="explain_modes")
     builder.button(text="❌ Bekor qilish", callback_data="buy_cancel")
@@ -1080,8 +1094,8 @@ async def explain_monthly_callback(call: types.CallbackQuery, state: FSMContext)
     )
     
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"⚡️ Polling ({int(float(poll_p)):,} som/oy)", callback_data="buy_mode:polling")
-    builder.button(text=f"🌐 Webhook ({int(float(web_p)):,} som/oy)", callback_data="buy_mode:webhook")
+    builder.button(text=f"⚡️ Polling ({safe_int(poll_p):,} som/oy)", callback_data="buy_mode:polling")
+    builder.button(text=f"🌐 Webhook ({safe_int(web_p):,} som/oy)", callback_data="buy_mode:webhook")
     builder.button(text="❓ Webhook va Polling nima?", callback_data="explain_modes")
     builder.button(text="❌ Bekor qilish", callback_data="buy_cancel")
     builder.adjust(2, 1, 1)
@@ -1102,8 +1116,8 @@ async def explain_modes_callback(call: types.CallbackQuery):
     )
     
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"⚡️ Polling ({int(float(poll_p)):,} som/oy)", callback_data="buy_mode:polling")
-    builder.button(text=f"🌐 Webhook ({int(float(web_p)):,} som/oy)", callback_data="buy_mode:webhook")
+    builder.button(text=f"⚡️ Polling ({safe_int(poll_p):,} som/oy)", callback_data="buy_mode:polling")
+    builder.button(text=f"🌐 Webhook ({safe_int(web_p):,} som/oy)", callback_data="buy_mode:webhook")
     builder.button(text="❓ Oylik to'lov nima?", callback_data="explain_monthly")
     builder.button(text="❌ Bekor qilish", callback_data="buy_cancel")
     builder.adjust(2, 1, 1)
@@ -1125,9 +1139,9 @@ async def process_user_buy_mode(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
     mode = call.data.split(":")[1]
     
-    bot_sale_p = float(await get_setting("bot_sale_price", "60000"))
-    poll_p = float(await get_setting("polling_price", "20000"))
-    web_p = float(await get_setting("webhook_price", "25000"))
+    bot_sale_p = safe_int(await get_setting("bot_sale_price", "60000"))
+    poll_p = safe_int(await get_setting("polling_price", "20000"))
+    web_p = safe_int(await get_setting("webhook_price", "25000"))
     
     monthly = poll_p if mode == "polling" else web_p
     total = bot_sale_p + monthly
@@ -1136,11 +1150,12 @@ async def process_user_buy_mode(call: types.CallbackQuery, state: FSMContext):
     await state.set_state(BuyBotState.waiting_for_bot_token)
     
     await call.message.delete()
+    lang = await get_user_lang(call.from_user.id)
     await call.message.answer(
         f"📝 <b>Bot API Tokeningizni yuboring:</b>\n\n"
         f"<i>(Tokenni olish uchun @BotFather botidan yangi bot yarating va u yerdagi tokenni yuboring. Misol: 812345678:AAEgX...)</i>",
         parse_mode="HTML",
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_cancel_keyboard(lang=lang)
     )
 
 @dp.message(BuyBotState.waiting_for_bot_token)
@@ -1170,7 +1185,7 @@ async def process_buy_bot_token(message: types.Message, state: FSMContext):
         total = data['total_price']
         monthly = data['monthly_price']
         
-        bot_sale_p = float(await get_setting("bot_sale_price", "60000"))
+        bot_sale_p = safe_int(await get_setting("bot_sale_price", "60000"))
         
         text = (
             f"⚙️ <b>Tanlangan rejim:</b> {mode.upper()}\n"
@@ -1203,7 +1218,7 @@ async def process_buy_payment_method_callback(call: types.CallbackQuery, state: 
     actual_username = data['actual_username']
     token = data['bot_token']
     
-    bot_sale_p = float(await get_setting("bot_sale_price", "60000"))
+    bot_sale_p = safe_int(await get_setting("bot_sale_price", "60000"))
     user_id = call.from_user.id
     
     if method == "telegram":
@@ -1687,8 +1702,8 @@ async def admin_save_order_folder(message: types.Message, state: FSMContext):
     today_str = datetime.now().strftime("%Y-%m-%d")
     next_str = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
     
-    poll_p = float(await get_setting("polling_price", "20000"))
-    web_p = float(await get_setting("webhook_price", "25000"))
+    poll_p = safe_int(await get_setting("polling_price", "20000"))
+    web_p = safe_int(await get_setting("webhook_price", "25000"))
     m_price = poll_p if order['mode'] == "polling" else web_p
     
     rec_id = await add_client_bot(
@@ -1855,8 +1870,8 @@ async def process_server_folder(message: types.Message, state: FSMContext):
     web_p = await get_setting("webhook_price", "20000")
     
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"⚡️ Polling ({int(float(poll_p)):,} som)", callback_data="set_mode:polling")
-    builder.button(text=f"🌐 Webhook ({int(float(web_p)):,} som)", callback_data="set_mode:webhook")
+    builder.button(text=f"⚡️ Polling ({safe_int(poll_p):,} som)", callback_data="set_mode:polling")
+    builder.button(text=f"🌐 Webhook ({safe_int(web_p):,} som)", callback_data="set_mode:webhook")
     builder.adjust(2)
     
     await message.answer(
@@ -1873,7 +1888,7 @@ async def process_mode_choice(call: types.CallbackQuery, state: FSMContext):
     poll_p = await get_setting("polling_price", "15000")
     web_p = await get_setting("webhook_price", "20000")
     
-    m_price = float(poll_p) if mode == "polling" else float(web_p)
+    m_price = safe_int(poll_p) if mode == "polling" else safe_int(web_p)
     await state.update_data(mode=mode, monthly_price=m_price)
     
     await state.set_state(AddClientState.waiting_for_last_payment)
@@ -2329,7 +2344,7 @@ async def process_edit_mode_choice(call: types.CallbackQuery, state: FSMContext)
     
     poll_p = await get_setting("polling_price", "15000")
     web_p = await get_setting("webhook_price", "20000")
-    m_price = float(poll_p) if mode == "polling" else float(web_p)
+    m_price = safe_int(poll_p) if mode == "polling" else safe_int(web_p)
     
     await update_client_field(rec_id, "mode", mode)
     await update_client_field(rec_id, "monthly_price", m_price)
@@ -2339,7 +2354,8 @@ async def process_edit_mode_choice(call: types.CallbackQuery, state: FSMContext)
         f"✅ <b>Rejim {mode.upper()} ga va narx {int(m_price):,} som ga yangilandi!</b>",
         parse_mode="HTML"
     )
-    await call.message.answer("👤 <b>Mijozlar paneli:</b>", reply_markup=get_clients_panel_keyboard())
+    lang = await get_user_lang(call.from_user.id)
+    await call.message.answer("👤 <b>Mijozlar paneli:</b>", reply_markup=get_clients_panel_keyboard(lang=lang))
 
 @dp.message(EditClientState.waiting_for_new_value)
 async def apply_edit_value(message: types.Message, state: FSMContext):
@@ -2370,10 +2386,11 @@ async def apply_edit_value(message: types.Message, state: FSMContext):
             await update_client_field(rec_id, "next_payment_date", new_next)
             
         await state.clear()
+        lang = await get_user_lang(message.from_user.id)
         await message.answer(
             f"✅ <b>Ro'yxat ID #{rec_id} bot ma'lumotlari muvaffaqiyatli yangilandi!</b>",
             parse_mode="HTML",
-            reply_markup=get_clients_panel_keyboard()
+            reply_markup=get_clients_panel_keyboard(lang=lang)
         )
     except Exception as e:
         await message.answer(f"❌ Noto'g'ri qiymat kiritildi ({e}). Qaytadan kiriting:")
@@ -2442,7 +2459,8 @@ async def process_bot_search_query(message: types.Message, state: FSMContext):
     query = message.text.strip()
     if is_menu_button_or_command(query):
         await state.set_state(BotMgmtState.in_bot_panel)
-        await message.answer("🤖 <b>Botlarni boshqarish paneli:</b>", reply_markup=get_bot_mgmt_keyboard())
+        lang = await get_user_lang(message.from_user.id)
+        await message.answer("🤖 <b>Botlarni boshqarish paneli:</b>", reply_markup=get_bot_mgmt_keyboard(lang=lang))
         return
         
     from database import get_db
@@ -2472,7 +2490,8 @@ async def process_bot_search_query(message: types.Message, state: FSMContext):
         builder.button(text=f"🤖 #{c['id']} ({c['bot_username']})", callback_data=f"manage_bot:{c['id']}")
         
     builder.adjust(2)
-    await message.answer(text, parse_mode="HTML", reply_markup=get_bot_mgmt_keyboard())
+    lang = await get_user_lang(message.from_user.id)
+    await message.answer(text, parse_mode="HTML", reply_markup=get_bot_mgmt_keyboard(lang=lang))
 
 @dp.callback_query(F.data.startswith("manage_bot:"))
 async def manage_bot_details_callback(call: types.CallbackQuery):
