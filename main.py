@@ -14,7 +14,7 @@ from aiohttp import web
 
 # Telegram Bot uchun tashqi kutubxona importlari (aiogram v3)
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
