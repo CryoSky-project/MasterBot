@@ -79,6 +79,136 @@ ADMINS = ADMIN_IDS
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
+async def deploy_bot_task(order_id: int, user_id: int, bot_username: str, bot_token: str, mode: str):
+    try:
+        logging.info(f"[Deploy] Starting background deployment for order {order_id}...")
+        
+        # 1. Find unused num
+        num = 1
+        while True:
+            # check directory
+            exit_status, stdout_str, stderr_str = await run_vps_command(f'[ -d "/root/sky-{num}" ] && echo "yes" || echo "no"')
+            # check database
+            db_check_cmd = f"sudo -u postgres psql -tAc \"SELECT 1 FROM pg_database WHERE datname='sky{num}'\""
+            _, db_exists_str, _ = await run_vps_command(db_check_cmd)
+            
+            if stdout_str.strip() != "yes" and db_exists_str.strip() != "1":
+                break
+            num += 1
+            
+        folder_name = f"sky-{num}"
+        db_name = f"sky{num}"
+        logging.info(f"[Deploy] Selected folder: {folder_name}, database: {db_name}")
+        
+        # 2. Create PostgreSQL database and user
+        # Create user
+        create_user_cmd = f"sudo -u postgres psql -c \"CREATE USER {db_name} WITH PASSWORD '{db_name}';\""
+        await run_vps_command(create_user_cmd)
+        
+        # Create database
+        create_db_cmd = f"sudo -u postgres psql -c \"CREATE DATABASE {db_name} OWNER {db_name};\""
+        exit_code, stdout, stderr = await run_vps_command(create_db_cmd)
+        if exit_code != 0:
+            logging.error(f"[Deploy] Database creation warning/error: {stderr}")
+            
+        # 3. Copy template files to /root/sky-{num} (excluding venv)
+        copy_cmd = f"cp -r /root/sky /root/{folder_name} && rm -rf /root/{folder_name}/venv"
+        await run_vps_command(copy_cmd)
+        
+        # 4. Write .env file
+        env_content = (
+            f"API_ID=25266965\\n"
+            f"API_HASH=b4ddf909709ed810a0e49e410ab0ab24\\n"
+            f"DATABASE_URL=postgresql://{db_name}:{db_name}@localhost:5432/{db_name}\\n"
+            f"BOT_TOKEN={bot_token}\\n"
+            f"SECRET_ADMINS={user_id}\\n"
+        )
+        write_env_cmd = f'echo -e "{env_content}" > /root/{folder_name}/.env'
+        await run_vps_command(write_env_cmd)
+        
+        # 5. Create virtual environment and install requirements
+        create_venv_cmd = f"python3 -m venv /root/{folder_name}/venv"
+        await run_vps_command(create_venv_cmd)
+        
+        pip_install_cmd = f"/root/{folder_name}/venv/bin/pip install -r /root/{folder_name}/requirements.txt"
+        await run_vps_command(pip_install_cmd)
+        
+        # 6. Create systemd service file
+        service_content = (
+            f"[Unit]\\n"
+            f"Description=Sky Client Bot {num}\\n"
+            f"After=network.target\\n\\n"
+            f"[Service]\\n"
+            f"Type=simple\\n"
+            f"User=root\\n"
+            f"WorkingDirectory=/root/{folder_name}\\n"
+            f"ExecStart=/root/{folder_name}/venv/bin/python3 main.py\\n"
+            f"Restart=always\\n"
+            f"RestartSec=5\\n\\n"
+            f"[Install]\\n"
+            f"WantedBy=multi-user.target\\n"
+        )
+        write_service_cmd = f'echo -e "{service_content}" > /etc/systemd/system/{folder_name}.service'
+        await run_vps_command(write_service_cmd)
+        
+        # 7. Reload and start systemd service
+        await run_vps_command("systemctl daemon-reload")
+        await run_vps_command(f"systemctl enable {folder_name}.service")
+        await run_vps_command(f"systemctl start {folder_name}.service")
+        
+        # 8. Wait 20 seconds and restart
+        await asyncio.sleep(20)
+        await run_vps_command(f"systemctl restart {folder_name}.service")
+        
+        # 9. Save bot to master_clients database
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        next_str = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+        poll_p = float(await get_setting("polling_price", "20000"))
+        web_p = float(await get_setting("webhook_price", "25000"))
+        m_price = poll_p if mode == "polling" else web_p
+        
+        rec_id = await add_client_bot(
+            user_id, bot_username, bot_token,
+            folder_name, mode, m_price, today_str, next_str
+        )
+        
+        # 10. Notify user and admins
+        success_msg = (
+            f"🎉 <b>Botingiz tayyor va muvaffaqiyatli ishga tushirildi!</b>\\n\\n"
+            f"🤖 Bot: {bot_username}\\n"
+            f"📁 Server: <code>{folder_name}</code>\\n"
+            f"⏳ Keyingi to'lov: <b>{next_str}</b>\\n\\n"
+            f"Botingiz to'liq ishga tushdi, uni ishlatishingiz mumkin."
+        )
+        await bot.send_message(user_id, text=success_msg, parse_mode="HTML")
+        
+        admin_msg = (
+            f"🔔 <b>AUTO DEPLOY MUVAFFAQIYATLI YAKUNLANDI (№#{rec_id})</b>\\n\\n"
+            f"👤 Xaridor ID: <code>{user_id}</code>\\n"
+            f"🤖 Bot: {bot_username}\\n"
+            f"📁 Server: <code>{folder_name}</code>\\n"
+            f"🗄 DB: <code>{db_name}</code>\\n"
+            f"⚙️ Rejim: {mode.upper()}"
+        )
+        for admin_id in ADMINS:
+            try:
+                await bot.send_message(admin_id, text=admin_msg, parse_mode="HTML")
+            except Exception:
+                pass
+                
+    except Exception as e:
+        logging.error(f"[Deploy] Error in deploy_bot_task: {e}")
+        try:
+            error_msg = f"❌ <b>Botingizni avtomatik sozlashda xatolik yuz berdi.</b>\\nBizning adminlar tez orada yordam berishadi."
+            await bot.send_message(user_id, text=error_msg, parse_mode="HTML")
+        except Exception:
+            pass
+        for admin_id in ADMINS:
+            try:
+                await bot.send_message(admin_id, text=f"⚠️ <b>AUTO DEPLOY XATOLIK!</b>\\nOrder ID: #{order_id}\\nUser ID: {user_id}\\nBot: {bot_username}\\nXatolik: {e}", parse_mode="HTML")
+            except Exception:
+                pass
+
 # ==============================================================================
 # 3-BO'LIM: O'ZGARMASLAR VA VALIDATSIYA
 # ==============================================================================
@@ -1140,21 +1270,13 @@ async def process_successful_payment(message: types.Message, state: FSMContext):
         
         auto_create = await get_setting("auto_create_bot", "false")
         if auto_create == "true":
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            next_str = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-            clean_un = re.sub(r'[^a-zA-Z0-9]', '', actual_username).lower()
-            folder_name = f"sky-{clean_un}"
-            
-            await add_client_bot(
-                message.from_user.id, 
-                actual_username, 
-                token, 
-                folder_name, 
-                mode, 
-                total - float(await get_setting("bot_sale_price", "60000")), 
-                today_str, 
-                next_str
-            )
+            asyncio.create_task(deploy_bot_task(
+                order_id=order_id,
+                user_id=message.from_user.id,
+                bot_username=actual_username,
+                bot_token=token,
+                mode=mode
+            ))
             
             user_msg = (
                 f"✅ <b>To'lovingiz qabul qilindi va avtomatik tasdiqlandi!</b>\n\n"
@@ -1164,13 +1286,12 @@ async def process_successful_payment(message: types.Message, state: FSMContext):
             await message.answer(user_msg, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=(message.from_user.id in ADMINS)))
             
             admin_msg = (
-                f"🔔 <b>AUTO TASDIQLASH (Bot Yaratildi - №#{order_id})</b>\n\n"
+                f"🔔 <b>AUTO TASDIQLASH (Bot o'rnatilmoqda - №#{order_id})</b>\n\n"
                 f"👤 Xaridor ID: <code>{message.from_user.id}</code> (@{message.from_user.username or 'yoq'})\n"
                 f"🤖 Bot Username: {actual_username}\n"
                 f"⚙️ Rejimi: {mode.upper()}\n"
-                f"💰 To'lov summasi: {int(total):,} som\n"
-                f"📁 Server papkasi: <code>{folder_name}</code>\n\n"
-                f"✅ Tizim to'lovni avtomatik tasdiqladi (Telegram Native Invoice) va bot avtomatik tarzda yaratildi."
+                f"💰 To'lov summasi: {int(total):,} som\n\n"
+                f"✅ Tizim to'lovni avtomatik tasdiqladi (Telegram Native Invoice) va botni avtomatik o'rnatish (deploy) jarayoni boshlandi."
             )
             admin_builder = None
         else:
@@ -1436,25 +1557,18 @@ async def admin_approve_order(call: types.CallbackQuery, state: FSMContext):
     if auto_create == "true":
         await update_order_status(order_id, "approved")
         
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        next_str = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-        
-        poll_p = float(await get_setting("polling_price", "20000"))
-        web_p = float(await get_setting("webhook_price", "25000"))
-        m_price = poll_p if order['mode'] == "polling" else web_p
-        
-        clean_un = re.sub(r'[^a-zA-Z0-9]', '', order['bot_username']).lower()
-        folder_name = f"sky-{clean_un}"
-        
-        rec_id = await add_client_bot(
-            order['user_id'], order['bot_username'], order['bot_token'],
-            folder_name, order['mode'], m_price, today_str, next_str
-        )
+        asyncio.create_task(deploy_bot_task(
+            order_id=order_id,
+            user_id=order['user_id'],
+            bot_username=order['bot_username'],
+            bot_token=order['bot_token'],
+            mode=order['mode']
+        ))
         
         await call.message.reply(
             f"✅ <b>Buyurtma muvaffaqiyatli tasdiqlandi (Avtomatik yaratish faol)!</b>\n\n"
             f"🤖 Bot: {order['bot_username']}\n"
-            f"📁 Server papkasi: <code>{folder_name}</code>",
+            f"📁 Server: Avtomatik sozlanmoqda...",
             parse_mode="HTML"
         )
         
@@ -1462,8 +1576,7 @@ async def admin_approve_order(call: types.CallbackQuery, state: FSMContext):
         try:
             user_msg = (
                 f"🎉 <b>XUSHXABAR! Buyurtmangiz tasdiqlandi!</b>\n\n"
-                f"🤖 Botingiz: <b>{order['bot_username']}</b> muvaffaqiyatli ishga tushirildi.\n"
-                f"⏳ Keyingi to'lov sanasi: <b>{next_str}</b>\n\n"
+                f"🤖 Botingiz: <b>{order['bot_username']}</b> muvaffaqiyatli qabul qilindi.\n\n"
                 f"🤖 <b>Botni avtomatik yaratish tizimi ishga tushdi!</b>\n"
                 f"Botingiz yasalmoqda, iltimos 10-20 daqiqa kuting. Tayyor bo'lsa xabar beramiz."
             )
