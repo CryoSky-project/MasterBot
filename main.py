@@ -3151,18 +3151,34 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 app = web.Application()
 
+async def ping_handler(request):
+    """Render keep-alive ping handler (Мен тірімін / I am alive)."""
+    return web.json_response({
+        "status": "ok",
+        "message": "Мен тірімін! (Master Bot is active and running)",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+
 async def self_ping_loop(url: str):
-    """Bot o'chib qolmasligi uchun har 10 daqiqada o'ziga HTTP request yuboradi (o'zbekcha sharh)."""
-    await asyncio.sleep(15)
+    """Bot Render-da o'chib qolmasligi uchun har 5 daqiqada (300s) o'ziga HTTP request yuboradi (Keep-Alive)."""
+    await asyncio.sleep(10)
+    target_url = url.rstrip("/")
+    ping_endpoint = f"{target_url}/ping"
+    
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                print(f"[Self-Ping] Request yuborilmoqda: {url}")
-                async with session.get(url, timeout=10) as resp:
-                    print(f"[Self-Ping] Status: {resp.status}")
+                print(f"[Keep-Alive/Ping] Render өшіп қалмауы үшін өзіне сұраныс жіберілуде: {ping_endpoint}")
+                async with session.get(ping_endpoint, timeout=15) as resp:
+                    print(f"[Keep-Alive/Ping] Жауап алынды! Status: {resp.status} (Мен тірімін / Alive)")
             except Exception as e:
-                print(f"[Self-Ping] Xatolik: {e}")
-            await asyncio.sleep(600)
+                # Егер /ping қате берсе, тікелей негізгі URL-ге сұраныс жіберіп көреміз
+                try:
+                    async with session.get(target_url, timeout=15) as resp2:
+                        print(f"[Keep-Alive/Ping] Негізгі URL жауабы! Status: {resp2.status}")
+                except Exception as ex:
+                    print(f"[Keep-Alive/Ping] Ескерту/Қателік: {ex}")
+            await asyncio.sleep(300) # Әр 5 минут (300 секунд) сайын
 
 async def index_handler(request):
     """Veb-saytga kirganda bot holatini ko'rsatuvchi sahifa (o'zbekcha sharh)."""
@@ -3246,6 +3262,8 @@ async def index_handler(request):
     return web.Response(text=html_content, content_type="text/html")
 
 app.router.add_get("/", index_handler)
+app.router.add_get("/ping", ping_handler)
+app.router.add_get("/health", ping_handler)
 
 webhook_requests_handler = SimpleRequestHandler(
     dispatcher=dp,
@@ -3261,22 +3279,29 @@ async def on_startup(app):
     scheduler.add_job(check_payments_and_notify, 'cron', hour=9, minute=0)
     scheduler.start()
     
-    webhook_url = os.getenv("WEBHOOK_URL", "")
-    if webhook_url:
+    # Render Keep-Alive: 5 минут сайын өзіне пинг сұраныс жіберу
+    ping_url = os.getenv("PING_URL", "").strip()
+    webhook_url = os.getenv("WEBHOOK_URL", "").strip()
+    if not ping_url:
+        if webhook_url and "http" in webhook_url and "your-app-name" not in webhook_url:
+            ping_url = webhook_url.split("/webhook")[0]
+        else:
+            ping_url = "https://masterbot-14cw.onrender.com"
+            
+    print(f"🚀 Render Keep-Alive (Self-Ping) қосылды: {ping_url} (Әр 5 минут сайын)")
+    asyncio.create_task(self_ping_loop(ping_url))
+    
+    if webhook_url and not webhook_url.startswith("https://your-app-name"):
         try:
             print(f"Webhook o'rnatilmoqda: {webhook_url}")
             await bot.set_webhook(webhook_url)
             print("Webhook muvaffaqiyatli o'rnatildi!")
-            
-            # O'ziga self-ping yuborishni boshlash (Render uyqu rejimidan himoya)
-            base_url = webhook_url.split("/webhook")[0]
-            asyncio.create_task(self_ping_loop(base_url))
         except Exception as e:
             print(f"Webhook o'rnatishda xatolik: {e}. Polling rejimiga o'tilmoqda...")
             await bot.delete_webhook(drop_pending_updates=True)
             asyncio.create_task(run_polling())
     else:
-        print("WEBHOOK_URL topilmadi. Polling rejimida boshlanmoqda...")
+        print("WEBHOOK_URL topilmadi yoki standart. Polling rejimida boshlanmoqda...")
         await bot.delete_webhook(drop_pending_updates=True)
         asyncio.create_task(run_polling())
 
