@@ -460,6 +460,39 @@ async def update_order_status(order_id: int, status: str):
         async with db.pg_pool.acquire() as conn:
             await conn.execute("UPDATE orders SET status = $1 WHERE id = $2;", status, order_id)
 
+async def get_orders_by_user(user_id: int):
+    """Foydalanuvchining barcha buyurtmalarini olish."""
+    db = await get_db()
+    if db.is_sqlite:
+        async with db.sqlite_conn.execute("SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC;", (user_id,)) as cursor:
+            rows = await cursor.fetchall()
+            return [sqlite_row_to_dict(r) for r in rows]
+    else:
+        async with db.pg_pool.acquire() as conn:
+            return await conn.fetch("SELECT * FROM orders WHERE user_id = $1 ORDER BY id DESC;", user_id)
+
+async def search_users(query: str):
+    """Foydalanuvchilarni ID, username yoki ism bo'yicha qidirish."""
+    db = await get_db()
+    query = query.strip().lstrip("@")
+    if db.is_sqlite:
+        if query.isdigit():
+            uid = int(query)
+            async with db.sqlite_conn.execute("SELECT * FROM users WHERE user_id = ? OR username LIKE ? OR full_name LIKE ? ORDER BY user_id DESC;", (uid, f"%{query}%", f"%{query}%")) as cursor:
+                rows = await cursor.fetchall()
+                return [sqlite_row_to_dict(r) for r in rows]
+        else:
+            async with db.sqlite_conn.execute("SELECT * FROM users WHERE username LIKE ? OR full_name LIKE ? ORDER BY user_id DESC;", (f"%{query}%", f"%{query}%")) as cursor:
+                rows = await cursor.fetchall()
+                return [sqlite_row_to_dict(r) for r in rows]
+    else:
+        async with db.pg_pool.acquire() as conn:
+            if query.isdigit():
+                uid = int(query)
+                return await conn.fetch("SELECT * FROM users WHERE user_id = $1 OR username ILIKE $2 OR full_name ILIKE $2 ORDER BY user_id DESC;", uid, f"%{query}%")
+            else:
+                return await conn.fetch("SELECT * FROM users WHERE username ILIKE $1 OR full_name ILIKE $1 ORDER BY user_id DESC;", f"%{query}%")
+
 async def get_user_lang(user_id: int) -> str:
     """Foydalanuvchining til sozlamasini olish (default: uz) (o'zbekcha sharh)"""
     db = await get_db()
@@ -481,3 +514,4 @@ async def set_user_lang(user_id: int, lang: str):
     else:
         async with db.pg_pool.acquire() as conn:
             await conn.execute("UPDATE users SET lang = $1 WHERE user_id = $2;", lang, user_id)
+

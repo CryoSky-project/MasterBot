@@ -27,7 +27,7 @@ from database import (
     get_client_by_id, update_client_field, delete_client_bot,
     get_client_bots_by_user, get_setting, set_setting, create_order,
     get_order_by_id, update_order_status, search_clients,
-    get_user_lang, set_user_lang
+    get_user_lang, set_user_lang, get_orders_by_user, search_users
 )
 
 # Muhit o'zgaruvchilarini yuklash
@@ -236,6 +236,9 @@ MENU_BUTTONS = [
     "✏️ Mijoz tahrirlash",
     "🗑 Mijoz o'chirish",
     "🔍 Mijoz qidirish",
+    "🆔 ID bilan izlash",
+    "🆔 Поиск по ID",
+    "🆔 Search by ID",
     "⚡️ Polling narxini o'zgartirish",
     "🌐 Webhook narxini o'zgartirish",
     "🤖 Bot narxini o'zgartirish",
@@ -253,7 +256,16 @@ MENU_BUTTONS = [
     "🔍 Проверка API",
     "🔍 Проверка API токена",
     "🔍 Check API",
-    "🔍 Check API Token"
+    "🔍 Check API Token",
+    "👤 User paneli",
+    "👤 Панель пользователя",
+    "👤 User Panel",
+    "👑 Admin paneli",
+    "👑 Админ панель",
+    "👑 Admin Panel",
+    "🤖 Botlarni boshqarish",
+    "🤖 Управление ботами",
+    "🤖 Bot Management"
 ]
 
 def is_menu_button_or_command(text: str) -> bool:
@@ -461,6 +473,9 @@ class BroadcastState(StatesGroup):
 class SearchClientState(StatesGroup):
     waiting_for_query = State()
 
+class SearchUserByIdState(StatesGroup):
+    waiting_for_user_id = State()
+
 class BotMgmtState(StatesGroup):
     in_bot_panel = State()
     waiting_for_search_query = State()
@@ -481,6 +496,7 @@ def get_admin_main_keyboard(lang="uz"):
         builder.button(text="📊 Статистика")
         builder.button(text="📢 Рассылка рекламы")
         builder.button(text="🔍 Проверка API токена")
+        builder.button(text="🆔 Поиск по ID")
         builder.button(text="👤 Юзер панель")
     elif lang == "en":
         builder.button(text="👤 Clients Panel")
@@ -488,6 +504,7 @@ def get_admin_main_keyboard(lang="uz"):
         builder.button(text="📊 Statistics")
         builder.button(text="📢 Broadcast Ad")
         builder.button(text="🔍 Check API Token")
+        builder.button(text="🆔 Search by ID")
         builder.button(text="👤 User Panel")
     else:
         builder.button(text="👤 Mijozlar paneli")
@@ -495,8 +512,9 @@ def get_admin_main_keyboard(lang="uz"):
         builder.button(text="📊 Statistika")
         builder.button(text="📢 Reklama tarqatish")
         builder.button(text="🔍 API tekshirish")
+        builder.button(text="🆔 ID bilan izlash")
         builder.button(text="👤 User paneli")
-    builder.adjust(2, 2, 2)
+    builder.adjust(2, 2, 2, 1)
     return builder.as_markup(resize_keyboard=True)
 
 def get_bot_mgmt_keyboard(lang="uz"):
@@ -525,6 +543,7 @@ def get_clients_panel_keyboard(lang="uz"):
         builder.button(text="🗑 Удалить клиента")
         builder.button(text="💳 Карта и Режимы")
         builder.button(text="🔍 Поиск клиента")
+        builder.button(text="🆔 Поиск по ID")
         builder.button(text="⬅️ Назад")
     elif lang == "en":
         builder.button(text="➕ Add Client")
@@ -533,6 +552,7 @@ def get_clients_panel_keyboard(lang="uz"):
         builder.button(text="🗑 Delete Client")
         builder.button(text="💳 Card and Modes")
         builder.button(text="🔍 Search Client")
+        builder.button(text="🆔 Search by ID")
         builder.button(text="⬅️ Back")
     else:
         builder.button(text="➕ Mijoz qo'shish")
@@ -541,8 +561,9 @@ def get_clients_panel_keyboard(lang="uz"):
         builder.button(text="🗑 Mijoz o'chirish")
         builder.button(text="💳 Karta va Rejimlar")
         builder.button(text="🔍 Mijoz qidirish")
+        builder.button(text="🆔 ID bilan izlash")
         builder.button(text="⬅️ Orqaga")
-    builder.adjust(2, 2, 2, 1)
+    builder.adjust(2, 2, 2, 2)
     return builder.as_markup(resize_keyboard=True)
 
 def get_modes_settings_keyboard(lang="uz"):
@@ -718,8 +739,9 @@ async def cancel_any_action(message: types.Message, state: FSMContext):
     if user_id in ADMINS:
         if current_state and ("SettingState" in current_state):
             await modes_panel_handler(message, state)
-        elif current_state and any(s in current_state for s in ["AddClientState", "EditClientState", "DeleteClientState", "SearchClientState"]):
-            await clients_panel_handler(message, state)
+        elif current_state and any(s in current_state for s in ["AddClientState", "EditClientState", "DeleteClientState", "SearchClientState", "SearchUserByIdState"]):
+            await state.clear()
+            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
         elif current_state and ("BuyBotState" in current_state):
             await admin_switch_to_user_panel(message, state)
         elif current_state and ("BroadcastState" in current_state):
@@ -752,8 +774,9 @@ async def back_to_previous_menu(message: types.Message, state: FSMContext):
             await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
         elif current_state and ("SettingState" in current_state):
             await modes_panel_handler(message, state)
-        elif current_state and any(s in current_state for s in ["AddClientState", "EditClientState", "DeleteClientState", "SearchClientState"]):
-            await clients_panel_handler(message, state)
+        elif current_state and any(s in current_state for s in ["AddClientState", "EditClientState", "DeleteClientState", "SearchClientState", "SearchUserByIdState"]):
+            await state.clear()
+            await message.answer("👑 <b>Asosiy boshqaruv paneli:</b>", parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
         elif current_state and ("BuyBotState" in current_state):
             await admin_switch_to_user_panel(message, state)
         elif current_state and ("BroadcastState" in current_state):
@@ -2497,6 +2520,360 @@ async def process_search_client(message: types.Message, state: FSMContext):
             f"────────────────────\n"
         )
     await message.answer(text, parse_mode="HTML", reply_markup=get_clients_panel_keyboard(lang=lang))
+
+# ==============================================================================
+# 17.5-BO'LIM: FOYDALANUVCHINI ID BO'YICHA IZLASH TIZIMI
+# ==============================================================================
+async def build_user_profile_response(user_id: int, lang: str = "uz") -> tuple[str, types.InlineKeyboardMarkup]:
+    """Foydalanuvchi haqida barcha ma'lumotlarni to'plab, to'liq profil kartasini va inline tugmalarni qaytarish."""
+    import html as py_html
+    
+    # 1. DB-dan ma'lumot olish
+    user_data = await get_user_by_id(user_id)
+    
+    # 2. Telegram API-dan chat ma'lumotlarini olish
+    tg_chat = None
+    try:
+        tg_chat = await bot.get_chat(user_id)
+    except Exception:
+        pass
+        
+    fn = ""
+    ln = ""
+    un = ""
+    bio = ""
+    
+    if tg_chat:
+        fn = tg_chat.first_name or ""
+        ln = tg_chat.last_name or ""
+        un = tg_chat.username or ""
+        bio = getattr(tg_chat, "bio", "") or getattr(tg_chat, "description", "") or ""
+    
+    full_name = f"{fn} {ln}".strip() if (fn or ln) else ""
+    if not full_name and user_data:
+        full_name = user_data.get("full_name") or ""
+    if not un and user_data:
+        un = user_data.get("username") or ""
+        
+    if not full_name:
+        full_name = f"Foydalanuvchi #{user_id}"
+        
+    # Bazada saqlab qo'yish yoki yangilash
+    if full_name or un:
+        try:
+            await add_user(user_id, un, full_name)
+        except Exception:
+            pass
+        
+    # Ism ko'k rangda bo'lishi va bosganda lichkaga kirishi uchun tg://user?id={user_id} giperhavolasi
+    name_link = f'<a href="tg://user?id={user_id}">{py_html.escape(full_name)}</a>'
+    
+    if un:
+        username_str = f"@{py_html.escape(un)} (https://t.me/{py_html.escape(un)})"
+    else:
+        username_str = "<i>Mavjud emas (Username yo'q)</i>" if lang == "uz" else ("<i>Не указан</i>" if lang == "ru" else "<i>Not set</i>")
+        
+    u_lang = (user_data.get("lang") if user_data else None) or (getattr(tg_chat, 'language_code', None) if tg_chat else None) or "uz"
+    if u_lang == "uz":
+        lang_display = "🇺🇿 O'zbekcha"
+    elif u_lang == "ru":
+        lang_display = "🇷🇺 Русский"
+    elif u_lang == "en":
+        lang_display = "🇬🇧 English"
+    else:
+        lang_display = f"🏳️ {u_lang}"
+        
+    is_admin = user_id in ADMINS
+    if lang == "ru":
+        role_str = "👑 Администратор" if is_admin else "👤 Пользователь"
+    elif lang == "en":
+        role_str = "👑 Administrator" if is_admin else "👤 Regular User"
+    else:
+        role_str = "👑 Asosiy Admin" if is_admin else "👤 Oddiy foydalanuvchi"
+        
+    if user_data and user_data.get("joined_at"):
+        joined_str = str(user_data["joined_at"]).split('.')[0]
+    else:
+        joined_str = "<i>Noma'lum (Bazada yangi)</i>" if lang == "uz" else ("<i>Не указано</i>" if lang == "ru" else "<i>Unknown</i>")
+        
+    bio_str = ""
+    if bio:
+        bio_title = "Bio" if lang != "ru" else "О себе"
+        bio_str = f"\n📝 <b>{bio_title}:</b> <i>{py_html.escape(bio)}</i>"
+        
+    # Mijoz botlari
+    client_bots = await get_client_bots_by_user(user_id)
+    today = datetime.now().date()
+    
+    if client_bots:
+        if lang == "ru":
+            bots_str = f"🤖 <b>Подключенные боты ({len(client_bots)} шт):</b>\n"
+        elif lang == "en":
+            bots_str = f"🤖 <b>Connected Bots ({len(client_bots)}):</b>\n"
+        else:
+            bots_str = f"🤖 <b>Ulangan botlar ({len(client_bots)} ta):</b>\n"
+            
+        for b in client_bots:
+            b_un = b['bot_username']
+            b_folder = b['server_folder']
+            b_mode = b['mode'].upper()
+            b_price = int(b.get('monthly_price', 0) or 0)
+            b_next = b.get('next_payment_date')
+            if isinstance(b_next, str):
+                try:
+                    b_next_date = datetime.strptime(b_next.split()[0], "%Y-%m-%d").date()
+                except Exception:
+                    b_next_date = None
+            else:
+                b_next_date = b_next
+            
+            rem_days = (b_next_date - today).days if b_next_date else 0
+            if lang == "ru":
+                status_icon = "🟢 Активен" if rem_days > 0 else "🔴 Срок истек!"
+                bots_str += (
+                    f"  ▫️ <b>Бот:</b> {b_un} | {status_icon}\n"
+                    f"     📁 Папка: <code>{b_folder}</code> | ⚙️ {b_mode}\n"
+                    f"     💰 В месяц: <b>{b_price:,} сум</b>\n"
+                    f"     ⏳ Оплата до: <b>{b_next}</b> (<i>осталось {rem_days} дн.</i>)\n"
+                )
+            elif lang == "en":
+                status_icon = "🟢 Active" if rem_days > 0 else "🔴 Expired!"
+                bots_str += (
+                    f"  ▫️ <b>Bot:</b> {b_un} | {status_icon}\n"
+                    f"     📁 Folder: <code>{b_folder}</code> | ⚙️ {b_mode}\n"
+                    f"     💰 Monthly: <b>{b_price:,} UZS</b>\n"
+                    f"     ⏳ Next payment: <b>{b_next}</b> (<i>{rem_days} days left</i>)\n"
+                )
+            else:
+                status_icon = "🟢 Faol" if rem_days > 0 else "🔴 To'lov vaqti kelgan!"
+                bots_str += (
+                    f"  ▫️ <b>Bot:</b> {b_un} | {status_icon}\n"
+                    f"     📁 Server: <code>{b_folder}</code> | ⚙️ {b_mode}\n"
+                    f"     💰 Oylik: <b>{b_price:,} so'm</b>\n"
+                    f"     ⏳ Keyingi to'lov: <b>{b_next}</b> (<i>{rem_days} kun qoldi</i>)\n"
+                )
+    else:
+        if lang == "ru":
+            bots_str = "🤖 <b>Боты:</b> <i>Боты не подключены (Не клиент)</i>\n"
+        elif lang == "en":
+            bots_str = "🤖 <b>Bots:</b> <i>No bots connected</i>\n"
+        else:
+            bots_str = "🤖 <b>Mijoz botlari:</b> <i>Ulangan botlar yo'q (Mijoz emas)</i>\n"
+            
+    # Buyurtmalar
+    orders = await get_orders_by_user(user_id)
+    if orders:
+        if lang == "ru":
+            orders_str = f"📦 <b>История заказов ({len(orders)} шт):</b>\n"
+        elif lang == "en":
+            orders_str = f"📦 <b>Order History ({len(orders)}):</b>\n"
+        else:
+            orders_str = f"📦 <b>Buyurtmalar tarixi ({len(orders)} ta):</b>\n"
+            
+        for o in orders[:3]:
+            o_st = o.get('status', 'pending')
+            if o_st == 'approved':
+                st_badge = "🟢 Tasdiqlangan" if lang == "uz" else ("🟢 Одобрен" if lang == "ru" else "🟢 Approved")
+            elif o_st == 'rejected':
+                st_badge = "🔴 Bekor qilingan" if lang == "uz" else ("🔴 Отклонен" if lang == "ru" else "🔴 Rejected")
+            else:
+                st_badge = "🟡 Kutilmoqda" if lang == "uz" else ("🟡 В обработке" if lang == "ru" else "🟡 Pending")
+            o_price = int(o.get('total_price', 0) or 0)
+            orders_str += f"  ▫️ #{o['id']}: {o.get('bot_username')} ({st_badge}) - {o_price:,} so'm\n"
+    else:
+        if lang == "ru":
+            orders_str = "📦 <b>Заказы:</b> <i>История покупок пуста</i>\n"
+        elif lang == "en":
+            orders_str = "📦 <b>Orders:</b> <i>No purchase orders found</i>\n"
+        else:
+            orders_str = "📦 <b>Buyurtmalar:</b> <i>Xaridlar mavjud emas</i>\n"
+
+    # Asosiy xabar matni
+    if lang == "ru":
+        text = (
+            f"👤 <b>ПОЛНАЯ ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ:</b>\n"
+            f"────────────────────────\n"
+            f"🔹 <b>Имя:</b> {name_link}\n"
+            f"🔹 <b>Telegram ID:</b> <code>{user_id}</code>\n"
+            f"🔹 <b>Username:</b> {username_str}\n"
+            f"🔹 <b>Язык:</b> {lang_display}\n"
+            f"🔹 <b>Роль в боте:</b> {role_str}\n"
+            f"🔹 <b>Дата регистрации:</b> <code>{joined_str}</code>{bio_str}\n"
+            f"────────────────────────\n"
+            f"{bots_str}"
+            f"────────────────────────\n"
+            f"{orders_str}"
+            f"────────────────────────\n"
+            f"💡 <i>Личное сообщение (ЛС) открыть: нажмите на <b>{name_link}</b> или на кнопку ниже.</i>"
+        )
+    elif lang == "en":
+        text = (
+            f"👤 <b>FULL USER INFORMATION:</b>\n"
+            f"────────────────────────\n"
+            f"🔹 <b>Name:</b> {name_link}\n"
+            f"🔹 <b>Telegram ID:</b> <code>{user_id}</code>\n"
+            f"🔹 <b>Username:</b> {username_str}\n"
+            f"🔹 <b>Language:</b> {lang_display}\n"
+            f"🔹 <b>Role:</b> {role_str}\n"
+            f"🔹 <b>Joined at:</b> <code>{joined_str}</code>{bio_str}\n"
+            f"────────────────────────\n"
+            f"{bots_str}"
+            f"────────────────────────\n"
+            f"{orders_str}"
+            f"────────────────────────\n"
+            f"💡 <i>To open direct message / chat, tap on <b>{name_link}</b> or the button below.</i>"
+        )
+    else:
+        text = (
+            f"👤 <b>FOYDALANUVCHI HAQIDA TO'LIQ MA'LUMOT:</b>\n"
+            f"────────────────────────\n"
+            f"🔹 <b>Ismi:</b> {name_link}\n"
+            f"🔹 <b>Telegram ID:</b> <code>{user_id}</code>\n"
+            f"🔹 <b>Username:</b> {username_str}\n"
+            f"🔹 <b>Tili:</b> {lang_display}\n"
+            f"🔹 <b>Tizimdagi roli:</b> {role_str}\n"
+            f"🔹 <b>Botga qo'shilgan:</b> <code>{joined_str}</code>{bio_str}\n"
+            f"────────────────────────\n"
+            f"{bots_str}"
+            f"────────────────────────\n"
+            f"{orders_str}"
+            f"────────────────────────\n"
+            f"💡 <i>Lichkaga (shaxsiy chatga) o'tish uchun foydalanuvchi <b>{name_link}</b> ustiga yoki pastdagi tugmaga bosing.</i>"
+        )
+
+    kb = InlineKeyboardBuilder()
+    if un:
+        kb.button(text="💬 Lichkasiga o'tish (Chat)" if lang == "uz" else ("💬 Написать в ЛС" if lang == "ru" else "💬 Open Direct Chat"), url=f"https://t.me/{un}")
+    else:
+        kb.button(text="💬 Lichkasiga o'tish (Chat)" if lang == "uz" else ("💬 Написать в ЛС" if lang == "ru" else "💬 Open Direct Chat"), url=f"tg://user?id={user_id}")
+    kb.button(text="🔄 Yangilash" if lang == "uz" else ("🔄 Обновить" if lang == "ru" else "🔄 Refresh"), callback_data=f"refresh_user_info:{user_id}")
+    kb.adjust(1, 1)
+    return text, kb.as_markup()
+
+async def perform_user_search_and_reply(message: types.Message, query: str, state: FSMContext, lang: str):
+    """Foydalanuvchini ID yoki username bo'yicha qidirib, javob yuborish."""
+    cleaned_query = query.strip().lstrip("@")
+    target_user_id = None
+    
+    # 1. Agar toza son bo'lsa (Telegram ID)
+    if cleaned_query.isdigit():
+        target_user_id = int(cleaned_query)
+    else:
+        # DB-dan username yoki ism bo'yicha qidirish
+        found_users = await search_users(cleaned_query)
+        if found_users:
+            target_user_id = found_users[0]['user_id']
+        else:
+            # Telegram API orqali @username tekshirish
+            try:
+                chat = await bot.get_chat(f"@{cleaned_query}" if not query.startswith("@") else query)
+                if chat and chat.id:
+                    target_user_id = chat.id
+            except Exception:
+                pass
+                
+    if not target_user_id:
+        if lang == "ru":
+            err_msg = (
+                f"❌ <b>Пользователь '{py_html.escape(query)}' не найден!</b>\n\n"
+                f"Пожалуйста, отправьте правильный числовой <b>Telegram ID</b> (например: <code>8551089366</code>) или нажмите <b>❌ Отмена</b>:"
+            )
+        elif lang == "en":
+            err_msg = (
+                f"❌ <b>User '{py_html.escape(query)}' not found!</b>\n\n"
+                f"Please provide a valid numeric <b>Telegram ID</b> (e.g., <code>8551089366</code>) or tap <b>❌ Cancel</b>:"
+            )
+        else:
+            err_msg = (
+                f"❌ <b>'{py_html.escape(query)}' bo'yicha foydalanuvchi topilmadi!</b>\n\n"
+                f"Iltimos, to'g'ri raqamli <b>Telegram ID</b> yuboring (Masalan: <code>8551089366</code>) yoki bekor qilish uchun <b>❌ Bekor qilish</b> tugmasini bosing:"
+            )
+        await message.answer(err_msg, parse_mode="HTML", reply_markup=get_cancel_keyboard(lang=lang))
+        return
+
+    await state.clear()
+    status_msg = await message.answer("⏳ <b>Ma'lumotlar yuklanmoqda...</b>" if lang == "uz" else ("⏳ <b>Загрузка данных...</b>" if lang == "ru" else "⏳ <b>Loading info...</b>"), parse_mode="HTML")
+    
+    card_text, card_kb = await build_user_profile_response(target_user_id, lang=lang)
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+        
+    await message.answer(card_text, parse_mode="HTML", reply_markup=card_kb)
+
+@dp.message(Command("id", "user", "find_user", "id_search", "search_user", "user_info"))
+@dp.message(F.text.in_(["🆔 ID bilan izlash", "🆔 Поиск по ID", "🆔 Search by ID"]))
+async def start_search_user_by_id_handler(message: types.Message, state: FSMContext):
+    """ID orqali foydalanuvchini qidirishni boshlash."""
+    lang = await get_user_lang(message.from_user.id)
+    
+    # Agar komanda orqali ID berilgan bo'lsa (masalan: /id 8551089366 yoki /id @username)
+    text = message.text.strip() if message.text else ""
+    if text.startswith("/"):
+        parts = text.split(maxsplit=1)
+        if len(parts) > 1 and parts[1].strip():
+            query = parts[1].strip()
+            await perform_user_search_and_reply(message, query, state, lang)
+            return
+
+    await state.set_state(SearchUserByIdState.waiting_for_user_id)
+    if lang == "ru":
+        prompt_text = (
+            "🆔 <b>Поиск пользователя по ID:</b>\n\n"
+            "Отправьте <b>Telegram ID</b> или <b>Username</b> пользователя:\n"
+            "<i>(Например: <code>8551089366</code> или <code>@username</code>)</i>"
+        )
+    elif lang == "en":
+        prompt_text = (
+            "🆔 <b>Search user by ID:</b>\n\n"
+            "Send the user's <b>Telegram ID</b> or <b>Username</b>:\n"
+            "<i>(For example: <code>8551089366</code> or <code>@username</code>)</i>"
+        )
+    else:
+        prompt_text = (
+            "🆔 <b>Foydalanuvchini ID bo'yicha izlash:</b>\n\n"
+            "Qidirmoqchi bo'lgan shaxsning <b>Telegram ID-sini</b> yoki <b>Username-ini</b> yuboring:\n"
+            "<i>(Masalan: <code>8551089366</code> yoki <code>@username</code>)</i>"
+        )
+    await message.answer(prompt_text, parse_mode="HTML", reply_markup=get_cancel_keyboard(lang=lang))
+
+@dp.message(SearchUserByIdState.waiting_for_user_id)
+async def process_search_user_by_id(message: types.Message, state: FSMContext):
+    """Foydalanuvchi kiritgan ID yoki username-ni qidirish."""
+    # Agar forward qilingan xabar bo'lsa
+    if message.forward_from:
+        target_id = message.forward_from.id
+        await state.clear()
+        lang = await get_user_lang(message.from_user.id)
+        card_text, card_kb = await build_user_profile_response(target_id, lang=lang)
+        await message.answer(card_text, parse_mode="HTML", reply_markup=card_kb)
+        return
+
+    query = message.text.strip() if message.text else ""
+    if is_menu_button_or_command(query):
+        await state.clear()
+        return
+
+    lang = await get_user_lang(message.from_user.id)
+    await perform_user_search_and_reply(message, query, state, lang)
+
+@dp.callback_query(F.data.startswith("refresh_user_info:"))
+async def callback_refresh_user_info(call: types.CallbackQuery):
+    """Foydalanuvchi profilini yangilash."""
+    try:
+        parts = call.data.split(":")
+        user_id = int(parts[1])
+        lang = await get_user_lang(call.from_user.id)
+        card_text, card_kb = await build_user_profile_response(user_id, lang=lang)
+        
+        await call.answer("✅ Yangilandi!" if lang == "uz" else ("✅ Обновлено!" if lang == "ru" else "✅ Refreshed!"))
+        try:
+            await call.message.edit_text(card_text, parse_mode="HTML", reply_markup=card_kb)
+        except Exception:
+            pass
+    except Exception as e:
+        await call.answer(f"Xatolik: {e}", show_alert=True)
 
 # ==============================================================================
 # 18-BO'LIM: ADMIN TOMONIDAN MIJOZNING O'CHIRILISHI VA TAHRIRLANISHI
