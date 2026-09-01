@@ -1422,7 +1422,7 @@ async def process_successful_payment(message: types.Message, state: FSMContext):
                 f"Botingiz yasalmoqda, iltimos 10-20 daqiqa kuting. Tayyor bo'lsa xabar beramiz."
             )
             builder_cancel = InlineKeyboardBuilder()
-            builder_cancel.button(text="❌ Орнатуды тоқтату (Cancel)", callback_data="cancel_deploy")
+            builder_cancel.button(text="❌ O'rnatishni bekor qilish (Cancel)", callback_data="cancel_deploy")
             await message.answer(user_msg, parse_mode="HTML", reply_markup=builder_cancel.as_markup())
             
             admin_msg = (
@@ -3130,7 +3130,7 @@ async def check_payments_and_notify():
 
             if msg:
                 builder = InlineKeyboardBuilder()
-                builder.button(text="💳 Төлеу (Pay)", callback_data=f"renew_bot:{bot_db_id}")
+                builder.button(text="💳 To'lash (Pay)", callback_data=f"renew_bot:{bot_db_id}")
                 markup = builder.as_markup()
                 
                 try:
@@ -3152,10 +3152,10 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 app = web.Application()
 
 async def ping_handler(request):
-    """Render keep-alive ping handler (Мен тірімін / I am alive)."""
+    """Render keep-alive ping handler (Men tirikman / I am alive)."""
     return web.json_response({
         "status": "ok",
-        "message": "Мен тірімін! (Master Bot is active and running)",
+        "message": "Men tirikman! (Master Bot is active and running)",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     })
 
@@ -3168,17 +3168,17 @@ async def self_ping_loop(url: str):
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                print(f"[Keep-Alive/Ping] Render өшіп қалмауы үшін өзіне сұраныс жіберілуде: {ping_endpoint}")
+                print(f"[Keep-Alive/Ping] Render o'chib qolmasligi uchun o'ziga so'rov yuborilmoqda: {ping_endpoint}")
                 async with session.get(ping_endpoint, timeout=15) as resp:
-                    print(f"[Keep-Alive/Ping] Жауап алынды! Status: {resp.status} (Мен тірімін / Alive)")
+                    print(f"[Keep-Alive/Ping] Javob olindi! Status: {resp.status} (Men tirikman / Alive)")
             except Exception as e:
-                # Егер /ping қате берсе, тікелей негізгі URL-ге сұраныс жіберіп көреміз
+                # Agar /ping xato bersa, to'g'ridan-to'g'ri asosiy URL-ga so'rov yuborib ko'ramiz
                 try:
                     async with session.get(target_url, timeout=15) as resp2:
-                        print(f"[Keep-Alive/Ping] Негізгі URL жауабы! Status: {resp2.status}")
+                        print(f"[Keep-Alive/Ping] Asosiy URL javobi! Status: {resp2.status}")
                 except Exception as ex:
-                    print(f"[Keep-Alive/Ping] Ескерту/Қателік: {ex}")
-            await asyncio.sleep(300) # Әр 5 минут (300 секунд) сайын
+                    print(f"[Keep-Alive/Ping] Ogohlantirish/Xatolik: {ex}")
+            await asyncio.sleep(300) # Har 5 daqiqa (300 soniya) sayin
 
 async def index_handler(request):
     """Veb-saytga kirganda bot holatini ko'rsatuvchi sahifa (o'zbekcha sharh)."""
@@ -3279,7 +3279,7 @@ async def on_startup(app):
     scheduler.add_job(check_payments_and_notify, 'cron', hour=9, minute=0)
     scheduler.start()
     
-    # Render Keep-Alive: 5 минут сайын өзіне пинг сұраныс жіберу
+    # Render Keep-Alive: Har 5 daqiqada o'ziga ping so'rovini yuborish
     ping_url = os.getenv("PING_URL", "").strip()
     webhook_url = os.getenv("WEBHOOK_URL", "").strip()
     if not ping_url:
@@ -3288,7 +3288,7 @@ async def on_startup(app):
         else:
             ping_url = "https://masterbot-14cw.onrender.com"
             
-    print(f"🚀 Render Keep-Alive (Self-Ping) қосылды: {ping_url} (Әр 5 минут сайын)")
+    print(f"🚀 Render Keep-Alive (Self-Ping) qo'shildi: {ping_url} (Har 5 daqiqada)")
     asyncio.create_task(self_ping_loop(ping_url))
     
     if webhook_url and not webhook_url.startswith("https://your-app-name"):
