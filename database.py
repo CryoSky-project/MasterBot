@@ -17,7 +17,7 @@ async def init_db():
     """PostgreSQL ulanish poolini ishga tushirish va agar mavjud bo'lmasa sxemalarni yaratish."""
     global pool
     if pool is None:
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10, statement_cache_size=0)
     
     async with pool.acquire() as conn:
         # Users table
