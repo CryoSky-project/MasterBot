@@ -8,6 +8,8 @@ import logging
 import html as py_html
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import aiohttp
+from aiohttp import web
 
 # Telegram Bot uchun tashqi kutubxona importlari (aiogram v3)
 from aiogram import Bot, Dispatcher, types, F
@@ -2735,8 +2737,141 @@ async def check_payments_and_notify(manual_admin_id: int = None):
     except Exception as e:
         logging.error(f"Error in check_payments_and_notify: {e}")
 
+# ==============================================================================
+# 22-BO'LIM: RENDER PORT BINDING, HEALTH-CHECK VA VEB SERVER
+# ==============================================================================
+async def ping_handler(request):
+    """Render keep-alive ping handler (Men tirikman / I am alive)."""
+    return web.json_response({
+        "status": "ok",
+        "message": "Men tirikman! (Sky Master Bot is active and running)",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+
+async def health_handler(request):
+    """Render/Kubernetes health-check endpoint."""
+    return web.Response(text="OK", status=200)
+
+async def index_handler(request):
+    """Veb-saytga kirganda bot holatini ko'rsatuvchi sahifa."""
+    bot_me = None
+    status_text = "Noma'lum"
+    status_class = "unknown"
+    try:
+        bot_me = await bot.get_me()
+        status_text = f"Bot faol va ishlamoqda: @{bot_me.username}"
+        status_class = "running"
+    except Exception as e:
+        status_text = f"Bot holati: {e}"
+        status_class = "stopped"
+        
+    html_content = f"""<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sky Master Bot Status</title>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #0b0f19;
+            color: #f1f5f9;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }}
+        .card {{
+            background: #1e293b;
+            padding: 35px;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4);
+            text-align: center;
+            max-width: 460px;
+            width: 100%;
+            border: 1px solid #334155;
+        }}
+        h1 {{
+            font-size: 24px;
+            margin-bottom: 20px;
+            color: #38bdf8;
+            letter-spacing: -0.5px;
+        }}
+        .status {{
+            display: inline-block;
+            padding: 10px 20px;
+            border-radius: 30px;
+            font-weight: 600;
+            font-size: 15px;
+            color: white;
+            margin: 15px 0;
+        }}
+        .running {{ background: linear-gradient(135deg, #10b981, #059669); }}
+        .stopped {{ background: linear-gradient(135deg, #ef4444, #dc2626); }}
+        .unknown {{ background: linear-gradient(135deg, #f59e0b, #d97706); }}
+        p {{
+            color: #94a3b8;
+            font-size: 13px;
+            margin-top: 15px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🚀 Sky Master Bot</h1>
+        <div class="status {status_class}">{status_text}</div>
+        <p>Oxirgi yangilangan vaqt: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+    </div>
+</body>
+</html>"""
+    return web.Response(text=html_content, content_type="text/html")
+
+async def self_ping_loop(url: str):
+    """Bot Render-da o'chib qolmasligi uchun har 5 daqiqada o'ziga HTTP request yuboradi (Keep-Alive)."""
+    await asyncio.sleep(15)
+    target_url = url.rstrip("/")
+    ping_endpoint = f"{target_url}/ping"
+    
+    async with aiohttp.ClientSession() as session:
+        while True:
+            try:
+                logging.info(f"[Keep-Alive/Ping] Render so'rovi yuborilmoqda: {ping_endpoint}")
+                async with session.get(ping_endpoint, timeout=15) as resp:
+                    logging.info(f"[Keep-Alive/Ping] Javob olindi! Status: {resp.status}")
+            except Exception as e:
+                try:
+                    async with session.get(target_url, timeout=15) as resp2:
+                        logging.info(f"[Keep-Alive/Ping] Asosiy URL javobi! Status: {resp2.status}")
+                except Exception as ex:
+                    logging.warning(f"[Keep-Alive/Ping] Xatolik: {ex}")
+            await asyncio.sleep(300)
+
+async def start_web_server():
+    """Render port binding talabini qondirish uchun aiohttp web serverini ishga tushirish."""
+    port = int(os.getenv("PORT", "8080"))
+    app = web.Application()
+    app.router.add_get("/", index_handler)
+    app.router.add_get("/ping", ping_handler)
+    app.router.add_get("/health", health_handler)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"🚀 Render Web server {port}-portda muvaffaqiyatli ishga tushdi!")
+    return runner
+
 async def main():
     await init_db()
+    
+    # Render port scanning uchun HTTP web serverini ishga tushirish
+    try:
+        await start_web_server()
+    except Exception as e:
+        logging.error(f"Web serverni ishga tushirishda xatolik: {e}")
+    
     # Har soatda va har kuni ertalab 9:00 da to'lovlarni avtomatik tekshiruvchi scheduler
     scheduler.add_job(check_payments_and_notify, 'interval', hours=1)
     scheduler.add_job(check_payments_and_notify, 'cron', hour=9, minute=0)
@@ -2745,7 +2880,26 @@ async def main():
     # Master bot ishga tushganda bir marta darhol tekshirish
     asyncio.create_task(check_payments_and_notify())
     
+    # Render Keep-Alive: Har 5 daqiqada o'ziga ping so'rovi yuborish
+    ping_url = os.getenv("PING_URL", "").strip()
+    webhook_url = os.getenv("WEBHOOK_URL", "").strip()
+    if not ping_url:
+        if webhook_url and "http" in webhook_url and "your-app-name" not in webhook_url:
+            ping_url = webhook_url.split("/webhook")[0]
+        else:
+            ping_url = "https://masterbot-14cw.onrender.com"
+            
+    if ping_url:
+        logging.info(f"🚀 Render Keep-Alive (Self-Ping) qo'shildi: {ping_url} (Har 5 daqiqada)")
+        asyncio.create_task(self_ping_loop(ping_url))
+    
     print("🚀 SKY MASTER BOT (LATIN UZBEK) IS RUNNING WITH SCHEDULER & AUTO-STOP/START...")
+    
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        logging.warning(f"delete_webhook xatosi: {e}")
+        
     await dp.start_polling(bot, polling_timeout=10)
 
 if __name__ == "__main__":
