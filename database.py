@@ -249,6 +249,17 @@ async def get_all_users():
         async with db.pg_pool.acquire() as conn:
             return await conn.fetch("SELECT * FROM users ORDER BY joined_at DESC;")
 
+async def get_user_by_id(user_id: int):
+    """Foydalanuvchini ID bo'yicha olish."""
+    db = await get_db()
+    if db.is_sqlite:
+        async with db.sqlite_conn.execute("SELECT * FROM users WHERE user_id = ?;", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            return sqlite_row_to_dict(row)
+    else:
+        async with db.pg_pool.acquire() as conn:
+            return await conn.fetchrow("SELECT * FROM users WHERE user_id = $1;", user_id)
+
 # ==============================================================================
 # 4-BO'LIM: MIJOZ BOTLARINI BOSHQARISH
 # ==============================================================================
@@ -277,23 +288,43 @@ async def get_all_clients():
     db = await get_db()
     date_fields = ['last_payment_date', 'next_payment_date']
     if db.is_sqlite:
-        async with db.sqlite_conn.execute("SELECT * FROM master_clients ORDER BY id ASC;") as cursor:
+        async with db.sqlite_conn.execute("""
+            SELECT m.*, u.full_name as user_full_name, u.username as user_username
+            FROM master_clients m
+            LEFT JOIN users u ON m.client_id = u.user_id
+            ORDER BY m.id ASC;
+        """) as cursor:
             rows = await cursor.fetchall()
             return [sqlite_row_to_dict(r, date_fields) for r in rows]
     else:
         async with db.pg_pool.acquire() as conn:
-            return await conn.fetch("SELECT * FROM master_clients ORDER BY id ASC;")
+            return await conn.fetch("""
+                SELECT m.*, u.full_name as user_full_name, u.username as user_username
+                FROM master_clients m
+                LEFT JOIN users u ON m.client_id = u.user_id
+                ORDER BY m.id ASC;
+            """)
 
 async def get_client_by_id(client_record_id: int):
     db = await get_db()
     date_fields = ['last_payment_date', 'next_payment_date']
     if db.is_sqlite:
-        async with db.sqlite_conn.execute("SELECT * FROM master_clients WHERE id = ?;", (client_record_id,)) as cursor:
+        async with db.sqlite_conn.execute("""
+            SELECT m.*, u.full_name as user_full_name, u.username as user_username
+            FROM master_clients m
+            LEFT JOIN users u ON m.client_id = u.user_id
+            WHERE m.id = ?;
+        """, (client_record_id,)) as cursor:
             row = await cursor.fetchone()
             return sqlite_row_to_dict(row, date_fields)
     else:
         async with db.pg_pool.acquire() as conn:
-            return await conn.fetchrow("SELECT * FROM master_clients WHERE id = $1;", client_record_id)
+            return await conn.fetchrow("""
+                SELECT m.*, u.full_name as user_full_name, u.username as user_username
+                FROM master_clients m
+                LEFT JOIN users u ON m.client_id = u.user_id
+                WHERE m.id = $1;
+            """, client_record_id)
 
 async def update_client_field(client_record_id: int, field_name: str, value):
     db = await get_db()
@@ -350,32 +381,44 @@ async def search_clients(query: str):
     if db.is_sqlite:
         if query.isdigit():
             cid = int(query)
-            async with db.sqlite_conn.execute(
-                "SELECT * FROM master_clients WHERE client_id = ? OR bot_username LIKE ? ORDER BY id ASC;",
-                (cid, f"%{query}%")
-            ) as cursor:
+            async with db.sqlite_conn.execute("""
+                SELECT m.*, u.full_name as user_full_name, u.username as user_username
+                FROM master_clients m
+                LEFT JOIN users u ON m.client_id = u.user_id
+                WHERE m.client_id = ? OR m.bot_username LIKE ? OR u.full_name LIKE ? OR u.username LIKE ?
+                ORDER BY m.id ASC;
+            """, (cid, f"%{query}%", f"%{query}%", f"%{query}%")) as cursor:
                 rows = await cursor.fetchall()
                 return [sqlite_row_to_dict(r, date_fields) for r in rows]
         else:
-            async with db.sqlite_conn.execute(
-                "SELECT * FROM master_clients WHERE bot_username LIKE ? ORDER BY id ASC;",
-                (f"%{query}%",)
-            ) as cursor:
+            async with db.sqlite_conn.execute("""
+                SELECT m.*, u.full_name as user_full_name, u.username as user_username
+                FROM master_clients m
+                LEFT JOIN users u ON m.client_id = u.user_id
+                WHERE m.bot_username LIKE ? OR u.full_name LIKE ? OR u.username LIKE ?
+                ORDER BY m.id ASC;
+            """, (f"%{query}%", f"%{query}%", f"%{query}%")) as cursor:
                 rows = await cursor.fetchall()
                 return [sqlite_row_to_dict(r, date_fields) for r in rows]
     else:
         async with db.pg_pool.acquire() as conn:
             if query.isdigit():
                 cid = int(query)
-                return await conn.fetch(
-                    "SELECT * FROM master_clients WHERE client_id = $1 OR bot_username ILIKE $2 ORDER BY id ASC;",
-                    cid, f"%{query}%"
-                )
+                return await conn.fetch("""
+                    SELECT m.*, u.full_name as user_full_name, u.username as user_username
+                    FROM master_clients m
+                    LEFT JOIN users u ON m.client_id = u.user_id
+                    WHERE m.client_id = $1 OR m.bot_username ILIKE $2 OR u.full_name ILIKE $2 OR u.username ILIKE $2
+                    ORDER BY m.id ASC;
+                """, cid, f"%{query}%")
             else:
-                return await conn.fetch(
-                    "SELECT * FROM master_clients WHERE bot_username ILIKE $1 ORDER BY id ASC;",
-                    f"%{query}%"
-                )
+                return await conn.fetch("""
+                    SELECT m.*, u.full_name as user_full_name, u.username as user_username
+                    FROM master_clients m
+                    LEFT JOIN users u ON m.client_id = u.user_id
+                    WHERE m.bot_username ILIKE $1 OR u.full_name ILIKE $1 OR u.username ILIKE $1
+                    ORDER BY m.id ASC;
+                """, f"%{query}%")
 
 # ==============================================================================
 # 5-BO'LIM: XARID BUYURTMALARINI BOSHQARISH

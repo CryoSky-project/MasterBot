@@ -23,7 +23,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Ma'lumotlar bazasi operatsiyalari importi
 from database import (
-    init_db, add_user, get_all_users, add_client_bot, get_all_clients,
+    init_db, add_user, get_all_users, get_user_by_id, add_client_bot, get_all_clients,
     get_client_by_id, update_client_field, delete_client_bot,
     get_client_bots_by_user, get_setting, set_setting, create_order,
     get_order_by_id, update_order_status, search_clients,
@@ -247,7 +247,13 @@ MENU_BUTTONS = [
     "👤 Mening botlarim va to'lovlarim",
     "📞 Admin bilan bog'lanish",
     "📢 Reklama tarqatish",
-    "ℹ️ Bot haqida malumot"
+    "ℹ️ Bot haqida malumot",
+    "🔍 API tekshirish",
+    "🔍 API tekshiruv",
+    "🔍 Проверка API",
+    "🔍 Проверка API токена",
+    "🔍 Check API",
+    "🔍 Check API Token"
 ]
 
 def is_menu_button_or_command(text: str) -> bool:
@@ -340,9 +346,76 @@ async def validate_bot_data(client_id: int, bot_username: str, bot_token: str, s
 
     return issues, actual_username
 
+async def check_telegram_bot_token(bot_token: str) -> dict:
+    """Telegram Bot Tokenini get_me orqali tekshirish."""
+    cleaned_token = bot_token.strip()
+    try:
+        from aiogram import Bot
+        temp_bot = Bot(token=cleaned_token)
+        try:
+            bot_info = await temp_bot.get_me()
+            return {
+                "ok": True,
+                "bot_id": bot_info.id,
+                "first_name": bot_info.first_name or "",
+                "last_name": bot_info.last_name or "",
+                "username": bot_info.username or "",
+                "can_join_groups": getattr(bot_info, "can_join_groups", None),
+                "can_read_all_group_messages": getattr(bot_info, "can_read_all_group_messages", None),
+                "supports_inline_queries": getattr(bot_info, "supports_inline_queries", None),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": str(e)
+            }
+        finally:
+            await temp_bot.session.close()
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e)
+        }
+
+async def get_client_display_name(client_id: int, client_row: dict = None) -> str:
+    """Mijozning to'liq ismini (Full name, Username) aniqlash."""
+    fn = ""
+    un = ""
+    if client_row:
+        fn = client_row.get("user_full_name") or ""
+        un = client_row.get("user_username") or ""
+        
+    if not fn and not un:
+        u = await get_user_by_id(client_id)
+        if u:
+            fn = u.get("full_name") or ""
+            un = u.get("username") or ""
+            
+    if not fn and not un:
+        try:
+            chat = await bot.get_chat(client_id)
+            fn = chat.full_name or chat.first_name or ""
+            un = chat.username or ""
+            if fn or un:
+                await add_user(client_id, un, fn)
+        except Exception:
+            pass
+
+    if fn and un:
+        return f"{py_html.escape(fn)} (@{py_html.escape(un)})"
+    elif fn:
+        return f"{py_html.escape(fn)}"
+    elif un:
+        return f"@{py_html.escape(un)}"
+    else:
+        return "Noma'lum"
+
 # ==============================================================================
 # 5-BO'LIM: FSM HOLATLARI (FINITE STATE MACHINE)
 # ==============================================================================
+class ApiCheckState(StatesGroup):
+    waiting_for_token = State()
+
 class AddClientState(StatesGroup):
     waiting_for_client_id = State()
     waiting_for_bot_username = State()
@@ -407,20 +480,23 @@ def get_admin_main_keyboard(lang="uz"):
         builder.button(text="🤖 Управление ботами")
         builder.button(text="📊 Статистика")
         builder.button(text="📢 Рассылка рекламы")
+        builder.button(text="🔍 Проверка API токена")
         builder.button(text="👤 Юзер панель")
     elif lang == "en":
         builder.button(text="👤 Clients Panel")
         builder.button(text="🤖 Bot Management")
         builder.button(text="📊 Statistics")
         builder.button(text="📢 Broadcast Ad")
+        builder.button(text="🔍 Check API Token")
         builder.button(text="👤 User Panel")
     else:
         builder.button(text="👤 Mijozlar paneli")
         builder.button(text="🤖 Botlarni boshqarish")
         builder.button(text="📊 Statistika")
         builder.button(text="📢 Reklama tarqatish")
+        builder.button(text="🔍 API tekshirish")
         builder.button(text="👤 User paneli")
-    builder.adjust(2, 2, 1)
+    builder.adjust(2, 2, 2)
     return builder.as_markup(resize_keyboard=True)
 
 def get_bot_mgmt_keyboard(lang="uz"):
@@ -514,21 +590,25 @@ def get_client_user_keyboard(is_admin: bool = False, lang="uz"):
     if lang == "ru":
         btn_buy = "🛒 Купить бота"
         btn_my = "👤 Мои боты и платежи"
+        btn_api = "🔍 Проверка API"
         btn_contact = "📞 Связаться с админом"
         btn_about = "ℹ️ Информация о боте"
     elif lang == "en":
         btn_buy = "🛒 Buy a bot"
         btn_my = "👤 My bots and payments"
+        btn_api = "🔍 Check API Token"
         btn_contact = "📞 Contact Admin"
         btn_about = "ℹ️ About Bot"
     else:
         btn_buy = "🛒 Bot sotib olish"
         btn_my = "👤 Mening botlarim va to'lovlarim"
+        btn_api = "🔍 API tekshirish"
         btn_contact = "📞 Admin bilan bog'lanish"
         btn_about = "ℹ️ Bot haqida malumot"
         
     builder.button(text=btn_buy)
     builder.button(text=btn_my)
+    builder.button(text=btn_api)
     builder.button(text=btn_contact)
     builder.button(text=btn_about)
     if is_admin:
@@ -539,9 +619,9 @@ def get_client_user_keyboard(is_admin: bool = False, lang="uz"):
         else:
             btn_admin = "👑 Admin paneli"
         builder.button(text=btn_admin)
-        builder.adjust(2, 2, 1)
+        builder.adjust(2, 1, 2, 1)
     else:
-        builder.adjust(2, 2)
+        builder.adjust(2, 1, 2)
     return builder.as_markup(resize_keyboard=True)
 
 # ==============================================================================
@@ -770,11 +850,128 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
     )
 
 # ==============================================================================
-# 9-BO'LIM: FOYDALANUVCHI MA'LUMOTLARI VA YO'RIQNOMALAR
+# 9-BO'LIM: API TOKEN TEKSHIRISH TIZIMI
 # ==============================================================================
+@dp.message(Command("check_api", "check_token", "token", "api"))
+@dp.message(F.text.in_(["🔍 API tekshirish", "🔍 API tekshiruv", "🔍 Проверка API", "🔍 Проверка API токена", "🔍 Check API", "🔍 Check API Token"]))
+async def start_api_check_handler(message: types.Message, state: FSMContext):
+    """API Tokenni tekshirish jarayonini boshlash."""
+    await state.set_state(ApiCheckState.waiting_for_token)
+    lang = await get_user_lang(message.from_user.id)
+    
+    if lang == "ru":
+        txt = (
+            "🔍 <b>Проверка Telegram Bot API токена:</b>\n\n"
+            "Отправьте API токен бота для быстрой проверки:\n"
+            "<i>(Например: <code>1234567890:ABCdefGHIjklMNOpqrsTUVwxyz</code>)</i>"
+        )
+    elif lang == "en":
+        txt = (
+            "🔍 <b>Check Telegram Bot API Token:</b>\n\n"
+            "Send the Bot API Token to verify:\n"
+            "<i>(Example: <code>1234567890:ABCdefGHIjklMNOpqrsTUVwxyz</code>)</i>"
+        )
+    else:
+        txt = (
+            "🔍 <b>Telegram Bot API Tokenini tekshirish:</b>\n\n"
+            "Tekshirmoqchi bo'lgan Bot API Tokeningizni yuboring:\n"
+            "<i>(Masalan: <code>1234567890:ABCdefGHIjklMNOpqrsTUVwxyz</code>)</i>"
+        )
+        
+    await message.answer(txt, parse_mode="HTML", reply_markup=get_cancel_keyboard(lang=lang))
+
+@dp.message(ApiCheckState.waiting_for_token)
+async def process_api_check_handler(message: types.Message, state: FSMContext):
+    """Kiritilgan tokenni Telegram API orqali tekshirish va ma'lumotlarni chiqarish."""
+    token = message.text.strip() if message.text else ""
+    lang = await get_user_lang(message.from_user.id)
+    
+    if is_menu_button_or_command(token) and not re.match(r'^\d{8,12}:[A-Za-z0-9_-]{35}$', token):
+        await state.clear()
+        if message.from_user.id in ADMINS:
+            await message.answer("👑 <b>Boshqaruv paneli:</b>", reply_markup=get_admin_main_keyboard(lang=lang))
+        else:
+            await message.answer("👋 <b>Asosiy menyu:</b>", reply_markup=get_client_user_keyboard(is_admin=False, lang=lang))
+        return
+        
+    wait_msg = await message.answer("⏳ <i>API Token tekshirilmoqda, iltimos kuting...</i>", parse_mode="HTML")
+    check_res = await check_telegram_bot_token(token)
+    await state.clear()
+    
+    if check_res.get("ok"):
+        bot_id = check_res.get("bot_id")
+        bot_name = check_res.get("first_name", "")
+        bot_last = check_res.get("last_name", "")
+        if bot_last:
+            bot_name = f"{bot_name} {bot_last}"
+        bot_username = check_res.get("username", "")
+        can_join = "Ha ✅" if check_res.get("can_join_groups") else "Yo'q ❌"
+        can_read = "Ha ✅" if check_res.get("can_read_all_group_messages") else "Yo'q ❌"
+        supports_inline = "Ha ✅" if check_res.get("supports_inline_queries") else "Yo'q ❌"
+        
+        reply_text = (
+            f"✅ <b>API TOKEN TO'G'RI VA BOT MAVJUD!</b>\n\n"
+            f"🤖 <b>Bot Username:</b> @{bot_username}\n"
+            f"👤 <b>Bot Nomi:</b> <code>{py_html.escape(bot_name)}</code>\n"
+            f"🆔 <b>Bot ID:</b> <code>{bot_id}</code>\n"
+            f"🔗 <b>Havola:</b> https://t.me/{bot_username}\n\n"
+            f"⚙️ <b>Qo'shimcha imkoniyatlari:</b>\n"
+            f"• Guruhlarga qo'shilish: <b>{can_join}</b>\n"
+            f"• Guruh xabarlarini o'qish: <b>{can_read}</b>\n"
+            f"• Inline rejim: <b>{supports_inline}</b>\n"
+        )
+        
+        # Tizimimizdagi mijozlar orasida ushbu bot bor-yo'qligini tekshirish
+        try:
+            all_clients = await get_all_clients()
+            matched = [c for c in all_clients if c.get("bot_token") == token or (bot_username and c.get("bot_username", "").lstrip("@").lower() == bot_username.lower())]
+            if matched:
+                c = matched[0]
+                user_name = await get_client_display_name(c['client_id'], c)
+                reply_text += (
+                    f"\n📋 <b>Tizimimizdagi ma'lumoti:</b>\n"
+                    f"• Ro'yxat ID: <b>#{c['id']}</b>\n"
+                    f"• Egasi (Mijoz): <b>{user_name}</b> (ID: <code>{c['client_id']}</code>)\n"
+                    f"• Server: <code>{c['server_folder']}</code>\n"
+                    f"• Rejim: <b>{c['mode'].upper()}</b>\n"
+                    f"• Keyingi to'lov: <b>{c['next_payment_date']}</b>\n"
+                )
+        except Exception:
+            pass
+            
+        builder = InlineKeyboardBuilder()
+        builder.button(text=f"🤖 @{bot_username} ga o'tish", url=f"https://t.me/{bot_username}")
+        
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+            
+        if message.from_user.id in ADMINS:
+            await message.answer(reply_text, parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
+            await message.answer("🔗 <b>Bot havolasi:</b>", reply_markup=builder.as_markup())
+        else:
+            await message.answer(reply_text, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=False, lang=lang))
+            await message.answer("🔗 <b>Bot havolasi:</b>", reply_markup=builder.as_markup())
+    else:
+        err = check_res.get("error", "Noma'lum xatolik")
+        reply_text = (
+            f"❌ <b>API TOKEN YAROQSIZ YOKI BUNDAY BOT TOPILMADI!</b>\n\n"
+            f"⚠️ <b>Xatolik:</b> <code>{py_html.escape(err)}</code>\n\n"
+            f"<i>Iltimos, @BotFather orqali tokeningiz to'g'riligini tekshiring va qaytadan yuboring.</i>"
+        )
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+            
+        if message.from_user.id in ADMINS:
+            await message.answer(reply_text, parse_mode="HTML", reply_markup=get_admin_main_keyboard(lang=lang))
+        else:
+            await message.answer(reply_text, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=False, lang=lang))
 
 # ==============================================================================
-# 9-BO'LIM: FOYDALANUVCHI MA'LUMOTLARI VA YO'RIQNOMALAR
+# 10-BO'LIM: FOYDALANUVCHI MA'LUMOTLARI VA YO'RIQNOMALAR
 # ==============================================================================
 @dp.message(F.text.in_(["ℹ️ Bot haqida malumot", "ℹ️ Информация о боте", "ℹ️ About Bot"]))
 async def client_guide_info(message: types.Message):
@@ -2225,10 +2422,12 @@ async def list_clients(message: types.Message):
         n_date = c['next_payment_date']
         rem_days = (n_date - today).days
         status_str = "🟢 Faol" if rem_days > 0 else "🔴 To'lov vaqti kelgan!"
+        user_name = await get_client_display_name(c['client_id'], c)
         
         text += (
             f"🆔 <b>Ro'yxat ID: #{c['id']}</b> | {status_str}\n"
-            f"👤 <b>Mijoz ID:</b> <code>{c['client_id']}</code>\n"
+            f"👤 <b>Mijoz:</b> {user_name}\n"
+            f"🆔 <b>Mijoz ID:</b> <code>{c['client_id']}</code>\n"
             f"🤖 <b>Bot:</b> {c['bot_username']}\n"
             f"📁 <b>Server:</b> <code>{c['server_folder']}</code>\n"
             f"⚙️ <b>Rejimi:</b> {c['mode'].upper()}\n"
@@ -2283,10 +2482,12 @@ async def process_search_client(message: types.Message, state: FSMContext):
         n_date = c['next_payment_date']
         rem_days = (n_date - today).days
         status_str = "🟢 Faol" if rem_days > 0 else "🔴 To'lov vaqti kelgan!"
+        user_name = await get_client_display_name(c['client_id'], c)
         
         text += (
             f"🆔 <b>Ro'yxat ID: #{c['id']}</b> | {status_str}\n"
-            f"👤 <b>Mijoz ID:</b> <code>{c['client_id']}</code>\n"
+            f"👤 <b>Mijoz:</b> {user_name}\n"
+            f"🆔 <b>Mijoz ID:</b> <code>{c['client_id']}</code>\n"
             f"🤖 <b>Bot:</b> {c['bot_username']}\n"
             f"📁 <b>Server:</b> <code>{c['server_folder']}</code>\n"
             f"⚙️ <b>Rejimi:</b> {c['mode'].upper()}\n"
@@ -2334,10 +2535,12 @@ async def confirm_delete_client(message: types.Message, state: FSMContext):
         builder.button(text="❌ Yo'q, bekor qilish", callback_data="del_client_cancel")
         builder.adjust(2)
         
+        user_name = await get_client_display_name(client['client_id'], client)
         confirm_text = (
             f"⚠️ <b>Rostdan ham Ro'yxat ID #{rec_id} ({client['bot_username']}) botini o'chirmoqchimisiz?</b>\n\n"
-            f"👤 Mijoz ID: <code>{client['client_id']}</code>\n"
-            f"📁 Server: <code>{client['server_folder']}</code>"
+            f"👤 <b>Mijoz:</b> {user_name}\n"
+            f"🆔 <b>Mijoz ID:</b> <code>{client['client_id']}</code>\n"
+            f"📁 <b>Server:</b> <code>{client['server_folder']}</code>"
         )
         await message.answer(confirm_text, parse_mode="HTML", reply_markup=builder.as_markup())
     except ValueError:
@@ -2398,14 +2601,16 @@ async def select_field_to_edit(message: types.Message, state: FSMContext):
         builder.button(text="⏳ Keyingi to'lov sanasi", callback_data="efield:next_payment_date")
         builder.adjust(2)
         
+        user_name = await get_client_display_name(client['client_id'], client)
         info_text = (
             f"✏️ <b>Ro'yxat ID #{rec_id} ({client['bot_username']}) ma'lumotlarini tahrirlash:</b>\n\n"
-            f"👤 Mijoz ID: <code>{client['client_id']}</code>\n"
-            f"📁 Papka: <code>{client['server_folder']}</code>\n"
-            f"⚙️ Rejimi: {client['mode'].upper()}\n"
-            f"💰 Narxi: {int(client['monthly_price']):,} som\n"
-            f"📅 Oxirgi to'lov: {client['last_payment_date']}\n"
-            f"⏳ Keyingi to'lov: {client['next_payment_date']}\n\n"
+            f"👤 <b>Mijoz:</b> {user_name}\n"
+            f"🆔 <b>Mijoz ID:</b> <code>{client['client_id']}</code>\n"
+            f"📁 <b>Papka:</b> <code>{client['server_folder']}</code>\n"
+            f"⚙️ <b>Rejimi:</b> {client['mode'].upper()}\n"
+            f"💰 <b>Narxi:</b> {int(client['monthly_price']):,} som\n"
+            f"📅 <b>Oxirgi to'lov:</b> {client['last_payment_date']}\n"
+            f"⏳ <b>Keyingi to'lov:</b> {client['next_payment_date']}\n\n"
             f"Qaysi maydonni o'zgartirmoqchisiz?"
         )
         await message.answer(info_text, parse_mode="HTML", reply_markup=builder.as_markup())
@@ -2558,7 +2763,8 @@ async def list_bot_management(message: types.Message):
     text = f"📋 <b>Barcha Mijoz Botlari Ro'yxati ({len(clients)} ta):</b>\n\n"
     builder = InlineKeyboardBuilder()
     for c in clients:
-        text += f"🆔 #{c['id']} | 🤖 {c['bot_username']} (Folder: {c['server_folder']})\n"
+        user_name = await get_client_display_name(c['client_id'], c)
+        text += f"🆔 #{c['id']} | 🤖 {c['bot_username']} (👤 {user_name} | Folder: {c['server_folder']})\n"
         builder.button(text=f"🤖 #{c['id']} ({c['bot_username']})", callback_data=f"manage_bot:{c['id']}")
     
     builder.adjust(2)
@@ -2574,38 +2780,7 @@ async def process_bot_search_query(message: types.Message, state: FSMContext):
         await message.answer("🤖 <b>Botlarni boshqarish paneli:</b>", reply_markup=get_bot_mgmt_keyboard(lang=lang))
         return
         
-    from database import get_db, sqlite_row_to_dict
-    p = await get_db()
-    date_fields = ['last_payment_date', 'next_payment_date']
-    if p.is_sqlite:
-        if query.isdigit():
-            cid = int(query)
-            async with p.sqlite_conn.execute(
-                "SELECT * FROM master_clients WHERE id = ? OR client_id = ? OR bot_username LIKE ? ORDER BY id ASC;",
-                (cid, cid, f"%{query}%")
-            ) as cursor:
-                rows = await cursor.fetchall()
-                clients = [sqlite_row_to_dict(r, date_fields) for r in rows]
-        else:
-            async with p.sqlite_conn.execute(
-                "SELECT * FROM master_clients WHERE bot_username LIKE ? OR bot_token = ? ORDER BY id ASC;",
-                (f"%{query}%", query)
-            ) as cursor:
-                rows = await cursor.fetchall()
-                clients = [sqlite_row_to_dict(r, date_fields) for r in rows]
-    else:
-        async with p.pg_pool.acquire() as conn:
-            if query.isdigit():
-                cid = int(query)
-                clients = await conn.fetch(
-                    "SELECT * FROM master_clients WHERE id = $1 OR client_id = $1 OR bot_username ILIKE $2 ORDER BY id ASC;",
-                    cid, f"%{query}%"
-                )
-            else:
-                clients = await conn.fetch(
-                    "SELECT * FROM master_clients WHERE bot_username ILIKE $1 OR bot_token = $2 ORDER BY id ASC;",
-                    f"%{query}%", query
-                )
+    clients = await search_clients(query)
             
     if not clients:
         await message.answer("❌ <b>Ushbu ma'lumot bo'yicha hech qanday bot topilmadi!</b>\n\nQaytadan boshqa ID yoki username yuborib ko'ring:")
@@ -2615,7 +2790,8 @@ async def process_bot_search_query(message: types.Message, state: FSMContext):
     text = f"🔍 <b>Qidiruv natijalari ({len(clients)} ta bot topildi):</b>\n\n"
     builder = InlineKeyboardBuilder()
     for c in clients:
-        text += f"🆔 #{c['id']} | 🤖 {c['bot_username']} (Mijoz ID: {c['client_id']})\n"
+        user_name = await get_client_display_name(c['client_id'], c)
+        text += f"🆔 #{c['id']} | 🤖 {c['bot_username']} (👤 {user_name} | ID: {c['client_id']})\n"
         builder.button(text=f"🤖 #{c['id']} ({c['bot_username']})", callback_data=f"manage_bot:{c['id']}")
         
     builder.adjust(2)
@@ -2652,10 +2828,12 @@ async def show_bot_detail_view(message: types.Message, client):
         action_btn_text = "🟢 Botni yoqish (Start)"
         action_callback = f"bot_act:start:{client['id']}"
         
+    user_name = await get_client_display_name(client['client_id'], client)
     text = (
         f"🤖 <b>BOT MA'LUMOTLARI VA BOSHQARUVI:</b>\n\n"
         f"🆔 <b>Ro'yxat ID:</b> #{client['id']}\n"
-        f"👤 <b>Mijoz ID:</b> <code>{client['client_id']}</code>\n"
+        f"👤 <b>Mijoz:</b> {user_name}\n"
+        f"🆔 <b>Mijoz ID:</b> <code>{client['client_id']}</code>\n"
         f"🤖 <b>Bot Username:</b> {client['bot_username']}\n"
         f"⚙️ <b>Ish rejimi:</b> {client['mode'].upper()}\n"
         f"📁 <b>Server papkasi:</b> <code>{client['server_folder']}</code>\n"
@@ -2687,7 +2865,8 @@ async def bot_back_to_list_callback(call: types.CallbackQuery):
     text = f"📋 <b>Barcha Mijoz Botlari Ro'yxati ({len(clients)} ta):</b>\n\n"
     builder = InlineKeyboardBuilder()
     for c in clients:
-        text += f"🆔 #{c['id']} | 🤖 {c['bot_username']} (Folder: {c['server_folder']})\n"
+        user_name = await get_client_display_name(c['client_id'], c)
+        text += f"🆔 #{c['id']} | 🤖 {c['bot_username']} (👤 {user_name} | Folder: {c['server_folder']})\n"
         builder.button(text=f"🤖 #{c['id']} ({c['bot_username']})", callback_data=f"manage_bot:{c['id']}")
     
     builder.adjust(2)
