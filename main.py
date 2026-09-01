@@ -2987,28 +2987,52 @@ async def client_my_bots(message: types.Message):
 
 @dp.callback_query(F.data.startswith("renew_bot:"))
 async def process_renew_bot_callback(call: types.CallbackQuery, state: FSMContext):
-    """Botni uzaytirish jarayonini boshlash va muddat tanlashni so'rash."""
+    """Botni uzaytirish jarayonini boshlash va muddat tanlashni so'rash (1, 2 yoki 3 oy)."""
     await call.answer()
     bot_id = int(call.data.split(":")[1])
     client = await get_client_by_id(bot_id)
+    lang = await get_user_lang(call.from_user.id)
     
     if not client:
         await call.message.reply("❌ Bot topilmadi!")
         return
         
-    text = (
-        f"💳 <b>Botni uzaytirish (Prolongation):</b>\n\n"
-        f"🤖 Bot: <b>{client['bot_username']}</b>\n"
-        f"💰 Oylik narxi: {int(client['monthly_price']):,} som\n\n"
-        f"Iltimos, botni necha oyga uzaytirmoqchi ekanligingizni tanlang:"
-    )
-    
+    if lang == "ru":
+        text = (
+            f"💳 <b>Продление срока бота (Оплата):</b>\n\n"
+            f"🤖 Бот: <b>{client['bot_username']}</b>\n"
+            f"💰 Ежемесячный платеж: {int(client['monthly_price']):,} сум\n\n"
+            f"Выберите, на сколько месяцев вперед вы хотите продлить бота:"
+        )
+        btn_1 = "⏳ 1 месяц"
+        btn_2 = "⏳ 2 месяца"
+        btn_3 = "⏳ 3 месяца"
+    elif lang == "en":
+        text = (
+            f"💳 <b>Bot Renewal (Payment):</b>\n\n"
+            f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+            f"💰 Monthly price: {int(client['monthly_price']):,} UZS\n\n"
+            f"Select how many months in advance you want to extend your bot:"
+        )
+        btn_1 = "⏳ 1 month"
+        btn_2 = "⏳ 2 months"
+        btn_3 = "⏳ 3 months"
+    else:
+        text = (
+            f"💳 <b>Bot muddatini uzaytirish (Oylik to'lov):</b>\n\n"
+            f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+            f"💰 Oylik narxi: {int(client['monthly_price']):,} som\n\n"
+            f"Iltimos, botni necha oyga oldindan to'lab uzaytirmoqchi ekanligingizni tanlang:"
+        )
+        btn_1 = "⏳ 1 oy"
+        btn_2 = "⏳ 2 oy"
+        btn_3 = "⏳ 3 oy"
+        
     builder = InlineKeyboardBuilder()
-    builder.button(text="⏳ 1 oy", callback_data=f"ren_dur:{bot_id}:1")
-    builder.button(text="⏳ 3 oy", callback_data=f"ren_dur:{bot_id}:3")
-    builder.button(text="⏳ 6 oy", callback_data=f"ren_dur:{bot_id}:6")
-    builder.button(text="⏳ 12 oy", callback_data=f"ren_dur:{bot_id}:12")
-    builder.adjust(2, 2)
+    builder.button(text=btn_1, callback_data=f"ren_dur:{bot_id}:1")
+    builder.button(text=btn_2, callback_data=f"ren_dur:{bot_id}:2")
+    builder.button(text=btn_3, callback_data=f"ren_dur:{bot_id}:3")
+    builder.adjust(3)
     
     await call.message.answer(text, parse_mode="HTML", reply_markup=builder.as_markup())
 
