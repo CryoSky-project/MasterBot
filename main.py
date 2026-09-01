@@ -2864,13 +2864,13 @@ async def start_web_server():
     return runner
 
 async def main():
-    await init_db()
-    
-    # Render port scanning uchun HTTP web serverini ishga tushirish
+    # Render port scanning uchun HTTP web serverini darhol ishga tushirish
     try:
         await start_web_server()
     except Exception as e:
         logging.error(f"Web serverni ishga tushirishda xatolik: {e}")
+        
+    await init_db()
     
     # Har soatda va har kuni ertalab 9:00 da to'lovlarni avtomatik tekshiruvchi scheduler
     scheduler.add_job(check_payments_and_notify, 'interval', hours=1)
