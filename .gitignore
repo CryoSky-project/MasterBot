@@ -1,13 +1,6 @@
-# Python cache files
+.env
+venv/
 __pycache__/
 *.pyc
-
-# Local configuration and databases
-.env
-database.db
-database.db-journal
-
-# Virtual environments
-venv/
-.venv/
-env/
+temp_videos/
+*.org
