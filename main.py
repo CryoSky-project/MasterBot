@@ -5,8 +5,10 @@ import os
 import re
 import asyncio
 import logging
+import calendar
+import paramiko
 import html as py_html
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
 import aiohttp
 from aiohttp import web
@@ -44,7 +46,18 @@ if not admin_env or not admin_env.strip():
 ADMIN_IDS = [int(i.strip()) for i in admin_env.split(",") if i.strip()]
 ADMINS = ADMIN_IDS
 
+# VPS SSH Sozlamalari (Mijoz botlarini masofadan boshqarish uchun)
+VPS_HOST = os.getenv("VPS_HOST", "157.173.110.5")
+VPS_PORT = int(os.getenv("VPS_PORT", "22"))
+VPS_USER = os.getenv("VPS_USER", "root")
+VPS_PASSWORD = os.getenv("VPS_PASSWORD", "Dyr20090308.")
+
 # Bot va Dispatcher obyektlarini yaratish
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
@@ -86,8 +99,69 @@ def is_menu_button_or_command(text: str) -> bool:
 # ==============================================================================
 # 4-BO'LIM: YORDAMCHI FUNKSIYALAR VA API TEKSHIRUVLARI
 # ==============================================================================
+def add_months(source_date, months: int) -> date:
+    """Kalendar oylari bo'yicha aniq oy qo'shish (30 kun emas, 1 oy = 1 kalendar oy)."""
+    if isinstance(source_date, datetime):
+        source_date = source_date.date()
+    elif isinstance(source_date, str):
+        source_date = datetime.strptime(source_date.strip(), "%Y-%m-%d").date()
+        
+    month = source_date.month - 1 + months
+    year = source_date.year + month // 12
+    month = month % 12 + 1
+    day = min(source_date.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+def execute_remote_command(command: str, timeout: int = 15) -> tuple[int, str, str]:
+    """Masofaviy VPS serverda (157.173.110.5) SSH orqali buyruq bajarish."""
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        ssh.connect(
+            hostname=VPS_HOST,
+            port=VPS_PORT,
+            username=VPS_USER,
+            password=VPS_PASSWORD,
+            timeout=timeout,
+            banner_timeout=timeout,
+            auth_timeout=timeout
+        )
+        stdin, stdout, stderr = ssh.exec_command(command, timeout=timeout)
+        exit_code = stdout.channel.recv_exit_status()
+        out = stdout.read().decode('utf-8', errors='ignore').strip()
+        err = stderr.read().decode('utf-8', errors='ignore').strip()
+        return exit_code, out, err
+    except Exception as e:
+        logging.error(f"SSH execution error on {VPS_HOST}: {e}")
+        return -1, "", str(e)
+    finally:
+        try:
+            ssh.close()
+        except Exception:
+            pass
+
+def check_remote_folder_exists(server_folder: str) -> bool:
+    """Masofaviy serverda bot papkasi mavjudligini tekshirish."""
+    if not server_folder:
+        return False
+    clean = server_folder.strip().strip("'\"")
+    cmd = f"test -d '/root/{clean}' || test -d '{clean}'"
+    code, _, _ = execute_remote_command(cmd)
+    return code == 0
+
+def find_remote_folders(query: str = "") -> list[str]:
+    """Masofaviy serverdagi mavjud bot papkalarini qidirish."""
+    cmd = "ls -d /root/sky-* /root/*/ 2>/dev/null"
+    code, out, _ = execute_remote_command(cmd)
+    if code != 0:
+        return []
+    lines = [os.path.basename(line.strip().rstrip('/')) for line in out.splitlines() if line.strip()]
+    if query:
+        lines = [l for l in lines if query.lower() in l.lower()]
+    return lines
+
 def parse_flexible_date(date_str: str) -> str:
-    """Moslashuvchan sana matnlarini (masalan, YYYYMMDD, YYYY.MM.DD) YYYY-MM-DD formatiga o'tkazish."""
+    """Moslashuvchan sana matnlarini YYYY-MM-DD formatiga o'tkazish."""
     date_str = date_str.strip()
     
     if re.match(r'^\d{8}$', date_str):
@@ -98,11 +172,9 @@ def parse_flexible_date(date_str: str) -> str:
         
     cleaned = re.sub(r'[\.\/\s]+', '-', date_str)
     
-    # Agar faqat kun va oy kiritilgan bo'lsa (masalan "20-07"), 2026 yilni avtomat qo'shamiz
     if re.match(r'^\d{1,2}-\d{1,2}$', cleaned):
         cleaned = f"{cleaned}-2026"
         
-    # 4-xonali va 2-xonali yil formatlarini qo'llab-quvvatlash
     formats = (
         "%Y-%m-%d", "%d-%m-%Y", "%Y-%d-%m",
         "%y-%m-%d", "%d-%m-%y", "%y-%d-%m"
@@ -120,7 +192,7 @@ def parse_flexible_date(date_str: str) -> str:
     raise ValueError(f"Sana formati noto'g'ri: {date_str}")
 
 async def validate_bot_data(client_id: int, bot_username: str, bot_token: str, server_folder: str, last_payment: str, next_payment: str):
-    """Telegram Bot Tokenini, server yo'lini va to'lov sanalarini asinxron tekshirish."""
+    """Telegram Bot Tokenini, masofaviy server yo'lini va to'lov sanalarini asinxron tekshirish."""
     issues = []
     actual_username = bot_username
 
@@ -137,9 +209,9 @@ async def validate_bot_data(client_id: int, bot_username: str, bot_token: str, s
     except Exception as e:
         issues.append(f"⚠️ <b>Bot API Token tekshirishda xatolik:</b> {e}")
 
-    folder_path = server_folder if server_folder.startswith("/") else os.path.join("/root", server_folder)
-    if not os.path.exists(folder_path):
-        issues.append(f"⚠️ <b>Serverda papka topilmadi:</b> <code>{folder_path}</code>")
+    folder_exists = await asyncio.to_thread(check_remote_folder_exists, server_folder)
+    if not folder_exists:
+        issues.append(f"⚠️ <b>Masofaviy VPS serverda papka topilmadi:</b> <code>{server_folder}</code>")
 
     try:
         d1 = datetime.strptime(last_payment, "%Y-%m-%d").date()
@@ -151,8 +223,6 @@ async def validate_bot_data(client_id: int, bot_username: str, bot_token: str, s
 
     return issues, actual_username
 
-import subprocess
-
 def get_service_name_by_folder(server_folder: str) -> str:
     """Papka nomi bo'yicha systemd service nomini olish."""
     if not server_folder:
@@ -161,55 +231,45 @@ def get_service_name_by_folder(server_folder: str) -> str:
     return clean if clean.startswith("sky-") else f"sky-{clean}"
 
 def start_bot_service(server_folder: str) -> bool:
-    """Server papkasi bo'yicha botning systemd xizmatini ishga tushirish (start)."""
+    """Masofaviy VPS serverda botning systemd xizmatini ishga tushirish (start)."""
     svc = get_service_name_by_folder(server_folder)
     if not svc:
         return False
-    try:
-        res = subprocess.run(["systemctl", "start", svc], capture_output=True, text=True)
-        logging.info(f"Systemctl start {svc}: returncode {res.returncode}")
-        return res.returncode == 0
-    except Exception as e:
-        logging.error(f"Error starting service {svc}: {e}")
-        return False
+    cmd = f"systemctl start {svc}"
+    code, out, err = execute_remote_command(cmd)
+    logging.info(f"SSH Systemctl start {svc}: code={code}")
+    return code == 0
 
 def stop_bot_service(server_folder: str) -> bool:
-    """Server papkasi bo'yicha botning systemd xizmatini to'xtatish (stop)."""
+    """Masofaviy VPS serverda botning systemd xizmatini to'xtatish (stop)."""
     svc = get_service_name_by_folder(server_folder)
     if not svc:
         return False
-    try:
-        res = subprocess.run(["systemctl", "stop", svc], capture_output=True, text=True)
-        logging.info(f"Systemctl stop {svc}: returncode {res.returncode}")
-        return res.returncode == 0
-    except Exception as e:
-        logging.error(f"Error stopping service {svc}: {e}")
-        return False
+    clean = os.path.basename(server_folder.strip().rstrip("/"))
+    cmd = f"systemctl stop {svc}; pkill -f '/root/{clean}/' 2>/dev/null || true"
+    code, out, err = execute_remote_command(cmd)
+    logging.info(f"SSH Systemctl stop {svc}: code={code}")
+    return code == 0
 
 def restart_bot_service(server_folder: str) -> bool:
-    """Server papkasi bo'yicha botning systemd xizmatini qayta ishga tushirish (restart)."""
+    """Masofaviy VPS serverda botning systemd xizmatini qayta ishga tushirish (restart)."""
     svc = get_service_name_by_folder(server_folder)
     if not svc:
         return False
-    try:
-        res = subprocess.run(["systemctl", "restart", svc], capture_output=True, text=True)
-        logging.info(f"Systemctl restart {svc}: returncode {res.returncode}")
-        return res.returncode == 0
-    except Exception as e:
-        logging.error(f"Error restarting service {svc}: {e}")
-        return False
+    cmd = f"systemctl restart {svc}"
+    code, out, err = execute_remote_command(cmd)
+    logging.info(f"SSH Systemctl restart {svc}: code={code}")
+    return code == 0
 
 def is_bot_service_active(server_folder: str) -> bool:
-    """Server papkasi bo'yicha botning systemd xizmati ishlab turganini tekshirish."""
+    """Masofaviy VPS serverda botning systemd xizmati ishlab turganini tekshirish."""
     svc = get_service_name_by_folder(server_folder)
     if not svc:
         return False
-    try:
-        res = subprocess.run(["systemctl", "is-active", svc], capture_output=True, text=True)
-        return res.stdout.strip() == "active"
-    except Exception as e:
-        logging.error(f"Error checking service {svc}: {e}")
-        return False
+    cmd = f"systemctl is-active {svc}"
+    code, out, err = execute_remote_command(cmd)
+    return out.strip() == "active"
+
 
 # ==============================================================================
 # 5-BO'LIM: FSM HOLATLARI (FINITE STATE MACHINE)
@@ -267,6 +327,10 @@ class AdminMenuState(StatesGroup):
     in_modes_panel = State()
     in_user_panel = State()
 
+class AdminQuickDurationState(StatesGroup):
+    waiting_for_custom_months = State()
+    waiting_for_custom_days = State()
+
 # ==============================================================================
 # 6-BO'LIM: TUGMA YASOVCHILAR
 # ==============================================================================
@@ -307,10 +371,9 @@ def get_modes_settings_keyboard():
     builder.button(text="🌐 Webhook narxini o'zgartirish")
     builder.button(text="🤖 Bot narxini o'zgartirish")
     builder.button(text="💳 Karta raqamini o'zgartirish")
-    builder.button(text="💳 Telegram to'lov tokenini o'zgartirish")
     builder.button(text="🤖 Auto Bot Yaratish")
     builder.button(text="⬅️ Orqaga")
-    builder.adjust(2, 2, 2, 1)
+    builder.adjust(2, 2, 1, 1)
     return builder.as_markup(resize_keyboard=True)
 
 def get_cancel_keyboard():
@@ -903,7 +966,6 @@ async def process_buy_bot_token(message: types.Message, state: FSMContext):
         await message.answer(f"✅ <b>Ulanish muvaffaqiyatli!</b>\n🤖 Bot: <b>{actual_username}</b> topildi.", parse_mode="HTML")
         
         await state.update_data(bot_token=token, actual_username=actual_username)
-        await state.set_state(BuyBotState.waiting_for_pay_method)
         
         data = await state.get_data()
         mode = data['buy_mode']
@@ -911,74 +973,10 @@ async def process_buy_bot_token(message: types.Message, state: FSMContext):
         monthly = data['monthly_price']
         
         bot_sale_p = float(await get_setting("bot_sale_price", "60000"))
-        
-        text = (
-            f"⚙️ <b>Tanlangan rejim:</b> {mode.upper()}\n"
-            f"🤖 <b>Bot Username:</b> {actual_username}\n"
-            f"💰 <b>Umumiy to'lov summasi:</b> <b>{int(total):,} som</b>\n"
-            f"<i>(Bot narxi: {int(bot_sale_p):,} som + 1-oylik to'lov: {int(monthly):,} som)</i>\n\n"
-            f"Iltimos, to'lov usulini tanlang:"
-        )
-        
-        builder = InlineKeyboardBuilder()
-        builder.button(text="💳 Telegram orqali tezkor to'lov (Click/Payme)", callback_data="buy_pay:telegram")
-        builder.button(text="👤 Karta orqali (Rasm/Chek yuborish)", callback_data="buy_pay:card")
-        builder.adjust(1, 1)
-        
-        await message.answer(text, parse_mode="HTML", reply_markup=builder.as_markup())
-    except Exception as e:
-        await wait_msg.delete()
-        await message.answer(f"❌ <b>API Token yaroqsiz!</b> BotFather bergan tokenni to'g'ri yuboring:\n\n<i>(Xatolik: {e})</i>", parse_mode="HTML")
-
-@dp.callback_query(BuyBotState.waiting_for_pay_method, F.data.startswith("buy_pay:"))
-async def process_buy_payment_method_callback(call: types.CallbackQuery, state: FSMContext):
-    """Bot sotib olish uchun tanlangan to'lov yo'nalishini bajarish."""
-    await call.answer()
-    method = call.data.split(":")[1]
-    data = await state.get_data()
-    
-    mode = data['buy_mode']
-    total = data['total_price']
-    monthly = data['monthly_price']
-    actual_username = data['actual_username']
-    token = data['bot_token']
-    
-    bot_sale_p = float(await get_setting("bot_sale_price", "60000"))
-    user_id = call.from_user.id
-    
-    if method == "telegram":
-        prov_token = await get_setting("provider_token", "")
-        if not prov_token:
-            await call.message.edit_text(
-                "⚠️ <b>Telegram orqali tezkor to'lov hozircha faollashtirilmagan!</b>\n\n"
-                "Iltimos, pastdagi Karta orqali to'lov tugmasini bosing:",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardBuilder().button(text="👤 Karta orqali to'lov", callback_data="buy_pay:card").as_markup()
-            )
-            return
-            
-        await call.message.delete()
-        prices = [
-            types.LabeledPrice(label="Bot sozlash", amount=int(bot_sale_p) * 100),
-            types.LabeledPrice(label=f"1-oylik {mode.upper()}", amount=int(monthly) * 100)
-        ]
-        
-        await bot.send_invoice(
-            chat_id=call.from_user.id,
-            title="Sky Bot Xarid qilish",
-            description=f"Bot xarid qilish - {mode.upper()} rejimi",
-            payload=f"buy_bot:{mode}:{int(total)}",
-            provider_token=prov_token,
-            currency="UZS",
-            prices=prices,
-            start_parameter="buy-bot-invoice"
-        )
-        
-    elif method == "card":
         card_num = await get_setting("card_number", "8600 0000 0000 0000")
         
         # Create pending order in database
-        order_id = await create_order(user_id, actual_username, token, mode, total, None)
+        order_id = await create_order(message.from_user.id, actual_username, token, mode, total, None)
         await state.update_data(buy_order_id=order_id)
         await state.set_state(BuyBotState.waiting_for_receipt)
         
@@ -987,22 +985,57 @@ async def process_buy_payment_method_callback(call: types.CallbackQuery, state: 
             f"🤖 <b>Bot Username:</b> {actual_username}\n"
             f"⚙️ <b>Tanlangan rejim:</b> {mode.upper()}\n"
             f"💰 <b>Umumiy to'lov summasi:</b> <b>{int(total):,} som</b>\n"
-            f"<i>(Bot narxi: {int(bot_sale_p):,} som + 1-oylik to'lov: {int(monthly):,} som)</i>\n\n"
-            f"💳 <b>Karta raqami:</b>\n"
+            f"<i>(Bot narxi: {int(bot_sale_p):,} som + 1-oylik abonent to'lovi: {int(monthly):,} som)</i>\n\n"
+            f"💳 <b>To'lov uchun karta raqami:</b>\n"
             f"<code>{card_num}</code>\n\n"
-            f"📲 Click / Payme / Uzum ilovalari orqali yuqoridagi kartaga to'lov qiling.\n\n"
-            f"📸 To'lovni amalga oshirgach, to'lov <b>CHEKINI (skrinshot yoki rasmini)</b> rasm yoki hujjat ko'rinishida shu yerga yuboring:"
+            f"📲 Iltimos, yuqoridagi kartaga to'lov qiling.\n\n"
+            f"📸 To'lovni amalga oshirgach, to'lov <b>CHEKINI (skrinshot yoki rasmini)</b> rasm yoki fayl ko'rinishida shu yerga yuboring:"
         )
         
         builder = InlineKeyboardBuilder()
-        builder.button(text="📲 Click App", url="https://click.uz")
-        builder.button(text="📲 Payme App", url="https://payme.uz")
         builder.button(text="📋 Kartani nusxalash", callback_data=f"copy_card:{card_num}")
-        builder.adjust(2, 1)
+        builder.adjust(1)
         
-        await call.message.delete()
-        await call.message.answer(pay_text, parse_mode="HTML", reply_markup=get_cancel_keyboard())
-        await call.message.answer("To'lov ilovalari:", reply_markup=builder.as_markup())
+        await message.answer(pay_text, parse_mode="HTML", reply_markup=get_cancel_keyboard())
+        await message.answer("To'lov kartasi:", reply_markup=builder.as_markup())
+    except Exception as e:
+        await wait_msg.delete()
+        await message.answer(f"❌ <b>API Token yaroqsiz!</b> BotFather bergan tokenni to'g'ri yuboring:\n\n<i>(Xatolik: {e})</i>", parse_mode="HTML")
+
+@dp.callback_query(BuyBotState.waiting_for_pay_method, F.data.startswith("buy_pay:"))
+async def process_buy_payment_method_callback(call: types.CallbackQuery, state: FSMContext):
+    """Eski tugmalar bosilganda ham to'g'ridan-to'g'ri karta ma'lumotlarini ko'rsatish."""
+    await call.answer()
+    data = await state.get_data()
+    mode = data.get('buy_mode', 'polling')
+    total = data.get('total_price', 80000)
+    monthly = data.get('monthly_price', 20000)
+    actual_username = data.get('actual_username', '')
+    token = data.get('bot_token', '')
+    user_id = call.from_user.id
+    
+    bot_sale_p = float(await get_setting("bot_sale_price", "60000"))
+    card_num = await get_setting("card_number", "8600 0000 0000 0000")
+    
+    order_id = await create_order(user_id, actual_username, token, mode, total, None)
+    await state.update_data(buy_order_id=order_id)
+    await state.set_state(BuyBotState.waiting_for_receipt)
+    
+    pay_text = (
+        f"💳 <b>KARTA ORQALI TO'LOV (BOT XARID QILISH)</b>\n\n"
+        f"🤖 <b>Bot:</b> {actual_username}\n"
+        f"💰 <b>Umumiy to'lov summasi:</b> <b>{int(total):,} som</b>\n\n"
+        f"💳 <b>To'lov uchun karta raqami:</b>\n"
+        f"<code>{card_num}</code>\n\n"
+        f"📸 To'lovni amalga oshirgach, to'lov <b>CHEKINI (skrinshot yoki rasmini)</b> yuboring:"
+    )
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📋 Kartani nusxalash", callback_data=f"copy_card:{card_num}")
+    builder.adjust(1)
+    
+    await call.message.delete()
+    await call.message.answer(pay_text, parse_mode="HTML", reply_markup=get_cancel_keyboard())
+    await call.message.answer("To'lov kartasi:", reply_markup=builder.as_markup())
 
 # ==============================================================================
 # 12-BO'LIM: TO'LOVNI TEKSHIRISH VA MUVAFFQQIYATLI TO'LOV HANDLERLARI
@@ -1301,11 +1334,8 @@ async def admin_approve_order(call: types.CallbackQuery, state: FSMContext):
             
         today = datetime.now().date()
         current_next = client['next_payment_date']
-        
-        if current_next < today:
-            new_next = today + timedelta(days=months * 30)
-        else:
-            new_next = current_next + timedelta(days=months * 30)
+        base_date = today if current_next < today else current_next
+        new_next = add_months(base_date, months)
             
         new_next_str = new_next.strftime("%Y-%m-%d")
         today_str = today.strftime("%Y-%m-%d")
@@ -1314,8 +1344,8 @@ async def admin_approve_order(call: types.CallbackQuery, state: FSMContext):
         await update_client_field(client['id'], 'last_payment_date', today_str)
         await update_client_field(client['id'], 'status', 'active')
         
-        # Bot xizmatini serverda darhol ishga tushirish (start)
-        start_bot_service(client['server_folder'])
+        # Bot xizmatini serverda darhol ishga tushirish (start via SSH)
+        await asyncio.to_thread(start_bot_service, client['server_folder'])
         
         await call.message.reply(
             f"✅ <b>Mijoz boti muvaffaqiyatli uzaytirildi va ishga tushirildi!</b>\n\n"
@@ -1342,8 +1372,9 @@ async def admin_approve_order(call: types.CallbackQuery, state: FSMContext):
     if auto_create == "true":
         await update_order_status(order_id, "approved")
         
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        next_str = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+        today_date = datetime.now().date()
+        today_str = today_date.strftime("%Y-%m-%d")
+        next_str = add_months(today_date, 1).strftime("%Y-%m-%d")
         
         poll_p = float(await get_setting("polling_price", "20000"))
         web_p = float(await get_setting("webhook_price", "25000"))
@@ -1406,8 +1437,9 @@ async def admin_save_order_folder(message: types.Message, state: FSMContext):
     await update_order_status(order_id, "approved")
     
     # master_clients ma'lumotlar bazasiga saqlash
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    next_str = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+    today_date = datetime.now().date()
+    today_str = today_date.strftime("%Y-%m-%d")
+    next_str = add_months(today_date, 1).strftime("%Y-%m-%d")
     
     poll_p = float(await get_setting("polling_price", "20000"))
     web_p = float(await get_setting("webhook_price", "25000"))
@@ -1418,8 +1450,8 @@ async def admin_save_order_folder(message: types.Message, state: FSMContext):
         folder_name, order['mode'], m_price, today_str, next_str
     )
     
-    # Bot xizmatini serverda darhol ishga tushirish (start)
-    start_bot_service(folder_name)
+    # Bot xizmatini serverda darhol ishga tushirish (start via SSH)
+    await asyncio.to_thread(start_bot_service, folder_name)
     
     await state.clear()
     await message.answer(f"✅ <b>Mijoz muvaffaqiyatli faollashtirildi va ishga tushirildi! (Ro'yxat ID: #{rec_id})</b>", parse_mode="HTML")
@@ -1631,13 +1663,13 @@ async def process_add_date_callback(call: types.CallbackQuery, state: FSMContext
     await state.set_state(AddClientState.waiting_for_next_payment)
     
     dt_l = datetime.strptime(date_val, "%Y-%m-%d")
-    next_suggest = (dt_l + timedelta(days=30)).strftime("%Y-%m-%d")
+    next_suggest = add_months(dt_l, 1).strftime("%Y-%m-%d")
     
     builder = InlineKeyboardBuilder()
-    builder.button(text="⏳ 1 oy (30 kundan keyin)", callback_data="add_duration:30")
-    builder.button(text="⏳ 3 oy (90 kundan keyin)", callback_data="add_duration:90")
-    builder.button(text="⏳ 6 oy (180 kundan keyin)", callback_data="add_duration:180")
-    builder.button(text="⏳ 12 oy (365 kundan keyin)", callback_data="add_duration:365")
+    builder.button(text="⏳ 1 oy", callback_data="add_months_choice:1")
+    builder.button(text="⏳ 3 oy", callback_data="add_months_choice:3")
+    builder.button(text="⏳ 6 oy", callback_data="add_months_choice:6")
+    builder.button(text="⏳ 12 oy", callback_data="add_months_choice:12")
     builder.adjust(2, 2)
     
     await call.message.edit_text(
@@ -1662,13 +1694,13 @@ async def process_last_payment(message: types.Message, state: FSMContext):
         await state.set_state(AddClientState.waiting_for_next_payment)
         
         dt_l = datetime.strptime(parsed_l_date, "%Y-%m-%d")
-        next_suggest = (dt_l + timedelta(days=30)).strftime("%Y-%m-%d")
+        next_suggest = add_months(dt_l, 1).strftime("%Y-%m-%d")
         
         builder = InlineKeyboardBuilder()
-        builder.button(text="⏳ 1 oy (30 kundan keyin)", callback_data="add_duration:30")
-        builder.button(text="⏳ 3 oy (90 kundan keyin)", callback_data="add_duration:90")
-        builder.button(text="⏳ 6 oy (180 kundan keyin)", callback_data="add_duration:180")
-        builder.button(text="⏳ 12 oy (365 kundan keyin)", callback_data="add_duration:365")
+        builder.button(text="⏳ 1 oy", callback_data="add_months_choice:1")
+        builder.button(text="⏳ 3 oy", callback_data="add_months_choice:3")
+        builder.button(text="⏳ 6 oy", callback_data="add_months_choice:6")
+        builder.button(text="⏳ 12 oy", callback_data="add_months_choice:12")
         builder.adjust(2, 2)
         
         await message.answer(
@@ -1681,17 +1713,31 @@ async def process_last_payment(message: types.Message, state: FSMContext):
     except ValueError:
         await message.answer("❌ <b>Noto'g'ri sana formati!</b> (Misol: 2026-07-20)")
 
+@dp.callback_query(F.data.startswith("add_months_choice:"))
+async def process_add_months_choice_callback(call: types.CallbackQuery, state: FSMContext):
+    """Oy bosilishini qayta ishlash, kalendar oyi bo'yicha hisoblash."""
+    await call.answer()
+    months = int(call.data.split(":")[1])
+    data = await state.get_data()
+    l_date_str = data['last_payment_date']
+    dt_l = datetime.strptime(l_date_str, "%Y-%m-%d").date()
+    n_date_str = add_months(dt_l, months).strftime("%Y-%m-%d")
+    await state.update_data(next_payment_date=n_date_str)
+    await proceed_to_client_validation(call.message, state, n_date_str)
+
 @dp.callback_query(F.data.startswith("add_duration:"))
 async def process_add_duration_callback(call: types.CallbackQuery, state: FSMContext):
-    """Muddat bosilishini qayta ishlash, keyingi to'lov sanasini hisoblash va mijoz ma'lumotlarini tekshirish."""
+    """Eski muddat bosilishini qayta ishlash."""
     await call.answer()
-    days = int(call.data.split(":")[1])
+    val = int(call.data.split(":")[1])
     data = await state.get_data()
-    
     l_date_str = data['last_payment_date']
-    dt_l = datetime.strptime(l_date_str, "%Y-%m-%d")
-    n_date_str = (dt_l + timedelta(days=days)).strftime("%Y-%m-%d")
-    
+    dt_l = datetime.strptime(l_date_str, "%Y-%m-%d").date()
+    if val in (30, 90, 180, 365):
+        m = {30: 1, 90: 3, 180: 6, 365: 12}.get(val, 1)
+        n_date_str = add_months(dt_l, m).strftime("%Y-%m-%d")
+    else:
+        n_date_str = (dt_l + timedelta(days=val)).strftime("%Y-%m-%d")
     await state.update_data(next_payment_date=n_date_str)
     await proceed_to_client_validation(call.message, state, n_date_str)
 
@@ -1963,9 +2009,12 @@ async def render_edit_client_fields(target_message, client: dict, state: FSMCont
     builder.button(text="💰 Oylik narxi", callback_data="efield:monthly_price")
     builder.button(text="📅 Oxirgi to'lov", callback_data="efield:last_payment_date")
     builder.button(text="⏳ Keyingi to'lov", callback_data="efield:next_payment_date")
-    builder.button(text="📊 Holati (Active / Expired)", callback_data="efield:status")
+    builder.button(text="📊 Holati", callback_data="efield:status")
+    builder.button(text="💰 Oylik to'lash (+1 oy)", callback_data=f"adm_pay_month:{rec_id}")
+    builder.button(text="➕ Oy qo'shish", callback_data=f"adm_add_m_menu:{rec_id}")
+    builder.button(text="➕ Kun qo'shish", callback_data=f"adm_add_d_menu:{rec_id}")
     builder.button(text="⬅️ Bekor qilish", callback_data="edit_client_cancel")
-    builder.adjust(2, 2, 2, 2, 1, 1)
+    builder.adjust(2, 2, 2, 2, 1, 2, 1, 1)
     
     st_emoji = "🟢 ACTIVE" if client.get('status') == 'active' else "🔴 EXPIRED / TO'XTATILGAN"
     info_text = (
@@ -1978,7 +2027,7 @@ async def render_edit_client_fields(target_message, client: dict, state: FSMCont
         f"📅 <b>Oxirgi to'lov:</b> {client['last_payment_date']}\n"
         f"⏳ <b>Keyingi to'lov:</b> {client['next_payment_date']}\n"
         f"📊 <b>Holati:</b> <b>{st_emoji}</b>\n\n"
-        f"<i>Qaysi maydonni o'zgartirmoqchisiz? Quyidagi tugmalardan birini tanlang:</i>"
+        f"<i>Qaysi maydonni o'zgartirmoqchisiz yoki muddat qo'shmoqchisiz? Quyidagi tugmalardan birini tanlang:</i>"
     )
     if is_callback:
         await target_message.edit_text(info_text, parse_mode="HTML", reply_markup=builder.as_markup())
@@ -2044,15 +2093,12 @@ async def select_field_to_edit(message: types.Message, state: FSMContext):
         clients = []
         if clean_text.isdigit():
             cid = int(clean_text)
-            # Try by DB primary key id FIRST
             c = await conn.fetchrow("SELECT * FROM master_clients WHERE id = $1;", cid)
             if c:
                 clients = [c]
             else:
-                # Try by client_id
                 clients = await conn.fetch("SELECT * FROM master_clients WHERE client_id = $1 ORDER BY id ASC;", cid)
         else:
-            # Search by username, server_folder or token
             clients = await conn.fetch(
                 "SELECT * FROM master_clients WHERE bot_username ILIKE $1 OR server_folder ILIKE $1 OR bot_token = $2 ORDER BY id ASC;",
                 f"%{clean_text}%", clean_text
@@ -2149,9 +2195,9 @@ async def process_edit_status_choice(call: types.CallbackQuery, state: FSMContex
     await update_client_field(rec_id, "status", st)
     if client:
         if st == "active":
-            start_bot_service(client['server_folder'])
+            await asyncio.to_thread(start_bot_service, client['server_folder'])
         else:
-            stop_bot_service(client['server_folder'])
+            await asyncio.to_thread(stop_bot_service, client['server_folder'])
             
     await state.clear()
     await call.message.edit_text(f"✅ <b>Holat {st.upper()} ga yangilandi va serverdagi xizmat boshqarildi!</b>", parse_mode="HTML")
@@ -2182,15 +2228,15 @@ async def apply_edit_value(message: types.Message, state: FSMContext):
         await update_client_field(rec_id, field, val)
         
         if field == "last_payment_date":
-            new_next = (datetime.strptime(val, "%Y-%m-%d") + timedelta(days=30)).strftime("%Y-%m-%d")
+            new_next = add_months(val, 1).strftime("%Y-%m-%d")
             await update_client_field(rec_id, "next_payment_date", new_next)
             
         client = await get_client_by_id(rec_id)
         if client and field in ("next_payment_date", "status"):
             if client['next_payment_date'] >= datetime.now().date() and client.get('status') == 'active':
-                start_bot_service(client['server_folder'])
+                await asyncio.to_thread(start_bot_service, client['server_folder'])
             elif client['next_payment_date'] < datetime.now().date():
-                stop_bot_service(client['server_folder'])
+                await asyncio.to_thread(stop_bot_service, client['server_folder'])
                 
         await state.clear()
         await message.answer(
@@ -2315,40 +2361,45 @@ async def manage_bot_details_callback(call: types.CallbackQuery):
     await show_bot_detail_view(call.message, client)
 
 async def show_bot_detail_view(message: types.Message, client):
-    """Bot tafsilotlarini va boshqaruv (Start/Stop/Restart) tugmalarini ko'rsatish."""
+    """Bot tafsilotlarini va boshqaruv (Start/Stop/Restart, Oylik to'lash, Oy/Kun qo'shish) tugmalarini ko'rsatish."""
     folder = client['server_folder']
-    service_name = folder if folder.startswith("sky-") else f"sky-{folder}"
+    service_name = get_service_name_by_folder(folder)
     
-    import subprocess
-    res = subprocess.run(["systemctl", "is-active", service_name], capture_output=True, text=True)
-    status = res.stdout.strip()
+    is_active = await asyncio.to_thread(is_bot_service_active, folder)
     
-    if status == "active":
+    if is_active:
         status_emoji = "🟢 Faol (Ishlamoqda)"
         action_btn_text = "🔴 Botni to'xtatish (Stop)"
         action_callback = f"bot_act:stop:{client['id']}"
     else:
-        status_emoji = f"🔴 O'chirilgan (Ishlamayapti - {status})"
+        status_emoji = "🔴 O'chirilgan (Ishlamayapti)"
         action_btn_text = "🟢 Botni yoqish (Start)"
         action_callback = f"bot_act:start:{client['id']}"
         
     text = (
-        f"🤖 <b>BOT MA'LUMOTLARI VA BOSHQARUVI:</b>\n\n"
+        f"🤖 <b>BOT MA'LUMOTLARI VA MASOFAVIY BOSHQARUV:</b>\n\n"
         f"🆔 <b>Ro'yxat ID:</b> #{client['id']}\n"
         f"👤 <b>Mijoz ID:</b> <code>{client['client_id']}</code>\n"
         f"🤖 <b>Bot Username:</b> {client['bot_username']}\n"
         f"⚙️ <b>Ish rejimi:</b> {client['mode'].upper()}\n"
         f"📁 <b>Server papkasi:</b> <code>{client['server_folder']}</code>\n"
         f"⚙️ <b>Systemd Servisi:</b> <code>{service_name}.service</code>\n"
-        f"📊 <b>Hozirgi holati:</b> <b>{status_emoji}</b>\n\n"
-        f"<i>Siz ushbu botning serverdagi xizmatini (systemd service) boshqarishingiz mumkin:</i>"
+        f"💰 <b>Oylik to'lov:</b> {int(client['monthly_price']):,} som\n"
+        f"📅 <b>Oxirgi to'lov:</b> {client['last_payment_date']}\n"
+        f"⏳ <b>Keyingi to'lov:</b> {client['next_payment_date']}\n"
+        f"📊 <b>Serverdagi holati:</b> <b>{status_emoji}</b>\n\n"
+        f"<i>Quyidagi tugmalar orqali botni serverda boshqarishingiz va to'lov muddatini uzaytirishingiz mumkin:</i>"
     )
     
     builder = InlineKeyboardBuilder()
     builder.button(text=action_btn_text, callback_data=action_callback)
-    builder.button(text="🔄 Qayta ishga tushirish (Restart)", callback_data=f"bot_act:restart:{client['id']}")
+    builder.button(text="🔄 Restart", callback_data=f"bot_act:restart:{client['id']}")
+    builder.button(text="💰 Oylik to'lash (+1 oy)", callback_data=f"adm_pay_month:{client['id']}")
+    builder.button(text="➕ Oy qo'shish", callback_data=f"adm_add_m_menu:{client['id']}")
+    builder.button(text="➕ Kun qo'shish", callback_data=f"adm_add_d_menu:{client['id']}")
+    builder.button(text="✏️ Tahrirlash", callback_data=f"edit_client_select:{client['id']}")
     builder.button(text="📋 Ro'yxatga qaytish", callback_data="bot_back_to_list")
-    builder.adjust(1, 1, 1)
+    builder.adjust(2, 1, 2, 1, 1)
     
     try:
         await message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
@@ -2375,7 +2426,7 @@ async def bot_back_to_list_callback(call: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("bot_act:"))
 async def process_bot_action_callback(call: types.CallbackQuery):
-    """Start, Stop yoki Restart buyruqlarini serverda bajarish."""
+    """Start, Stop yoki Restart buyruqlarini masofaviy SSH serverda bajarish."""
     parts = call.data.split(":")
     action = parts[1]
     client_id = int(parts[2])
@@ -2386,29 +2437,322 @@ async def process_bot_action_callback(call: types.CallbackQuery):
         return
         
     folder = client['server_folder']
-    service_name = folder if folder.startswith("sky-") else f"sky-{folder}"
+    service_name = get_service_name_by_folder(folder)
     
-    import subprocess
     if action == "start":
-        res = subprocess.run(["systemctl", "start", service_name])
-        if res.returncode == 0:
-            await call.answer(f"✅ {service_name} ishga tushirildi!", show_alert=True)
+        res = await asyncio.to_thread(start_bot_service, folder)
+        if res:
+            await update_client_field(client['id'], 'status', 'active')
+            await call.answer(f"✅ {service_name} masofaviy serverda ishga tushirildi!", show_alert=True)
         else:
-            await call.answer(f"❌ Xatolik yuz berdi ({res.returncode})", show_alert=True)
+            await call.answer(f"❌ Xatolik: {service_name} ni ishga tushirib bo'lmadi", show_alert=True)
     elif action == "stop":
-        res = subprocess.run(["systemctl", "stop", service_name])
-        if res.returncode == 0:
-            await call.answer(f"🛑 {service_name} to'xtatildi!", show_alert=True)
+        res = await asyncio.to_thread(stop_bot_service, folder)
+        if res:
+            await update_client_field(client['id'], 'status', 'expired')
+            await call.answer(f"🛑 {service_name} masofaviy serverda to'xtatildi!", show_alert=True)
         else:
-            await call.answer(f"❌ Xatolik yuz berdi ({res.returncode})", show_alert=True)
+            await call.answer(f"❌ Xatolik: {service_name} ni to'xtatib bo'lmadi", show_alert=True)
     elif action == "restart":
-        res = subprocess.run(["systemctl", "restart", service_name])
-        if res.returncode == 0:
-            await call.answer(f"🔄 {service_name} qayta ishga tushirildi!", show_alert=True)
+        res = await asyncio.to_thread(restart_bot_service, folder)
+        if res:
+            await update_client_field(client['id'], 'status', 'active')
+            await call.answer(f"🔄 {service_name} masofaviy serverda qayta ishga tushirildi!", show_alert=True)
         else:
-            await call.answer(f"❌ Xatolik yuz berdi ({res.returncode})", show_alert=True)
+            await call.answer(f"❌ Xatolik: {service_name} ni qayta ishga tushirib bo'lmadi", show_alert=True)
             
-    await show_bot_detail_view(call.message, client)
+    updated_client = await get_client_by_id(client_id)
+    await show_bot_detail_view(call.message, updated_client)
+
+# --- ADMIN TEZKOR MUDDAT VA OYLIK TO'LOV HANDLERLARI ---
+
+@dp.callback_query(F.data.startswith("adm_pay_month:"))
+async def admin_pay_month_callback(call: types.CallbackQuery):
+    """Admin tomonidan 1 oylik to'lov kiritilishi, bot muddatini 1 oyga uzaytirib ishga tushirish."""
+    await call.answer()
+    client_id = int(call.data.split(":")[1])
+    client = await get_client_by_id(client_id)
+    if not client:
+        await call.message.reply("❌ Bot topilmadi!")
+        return
+
+    today = datetime.now().date()
+    current_next = client['next_payment_date']
+    base_date = today if current_next < today else current_next
+    new_next = add_months(base_date, 1)
+    new_next_str = new_next.strftime("%Y-%m-%d")
+    today_str = today.strftime("%Y-%m-%d")
+
+    await update_client_field(client['id'], 'next_payment_date', new_next_str)
+    await update_client_field(client['id'], 'last_payment_date', today_str)
+    await update_client_field(client['id'], 'status', 'active')
+
+    # Start bot on remote VPS
+    await asyncio.to_thread(start_bot_service, client['server_folder'])
+
+    # Notify client
+    try:
+        await bot.send_message(
+            client['client_id'],
+            f"🎉 <b>Botingizning 1 oylik to'lovi qabul qilindi!</b>\n\n"
+            f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+            f"⏳ Keyingi to'lov sanasi: <b>{new_next_str}</b>\n"
+            f"🟢 Bot serverda faollashtirildi!",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Failed to notify client {client['client_id']}: {e}")
+
+    await call.answer(f"✅ 1 oylik to'lov kiritildi! Yangi sana: {new_next_str}", show_alert=True)
+    updated_client = await get_client_by_id(client_id)
+    await show_bot_detail_view(call.message, updated_client)
+
+@dp.callback_query(F.data.startswith("adm_add_m_menu:"))
+async def admin_add_month_menu_callback(call: types.CallbackQuery):
+    """Oy qo'shish tanlov menyusini chiqarish."""
+    await call.answer()
+    client_id = int(call.data.split(":")[1])
+    client = await get_client_by_id(client_id)
+    if not client:
+        await call.message.reply("❌ Bot topilmadi!")
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ 1 oy", callback_data=f"adm_add_m:{client_id}:1")
+    builder.button(text="➕ 2 oy", callback_data=f"adm_add_m:{client_id}:2")
+    builder.button(text="➕ 3 oy", callback_data=f"adm_add_m:{client_id}:3")
+    builder.button(text="➕ 6 oy", callback_data=f"adm_add_m:{client_id}:6")
+    builder.button(text="➕ 12 oy", callback_data=f"adm_add_m:{client_id}:12")
+    builder.button(text="✍️ Qo'lda kiritish", callback_data=f"adm_custom_m:{client_id}")
+    builder.button(text="⬅️ Orqaga", callback_data=f"manage_bot:{client_id}")
+    builder.adjust(2, 3, 1, 1)
+
+    text = (
+        f"📅 <b>Oy qo'shish (Kalendar oylari bo'yicha):</b>\n\n"
+        f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+        f"⏳ Hozirgi muddat: <b>{client['next_payment_date']}</b>\n\n"
+        f"Necha oy qo'shmoqchisiz?"
+    )
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data.startswith("adm_add_m:"))
+async def admin_add_month_exec_callback(call: types.CallbackQuery):
+    """Tanlangan oylarni bot muddatiga qo'shish."""
+    await call.answer()
+    parts = call.data.split(":")
+    client_id = int(parts[1])
+    months = int(parts[2])
+    client = await get_client_by_id(client_id)
+    if not client:
+        await call.message.reply("❌ Bot topilmadi!")
+        return
+
+    today = datetime.now().date()
+    current_next = client['next_payment_date']
+    base_date = today if current_next < today else current_next
+    new_next = add_months(base_date, months)
+    new_next_str = new_next.strftime("%Y-%m-%d")
+
+    await update_client_field(client['id'], 'next_payment_date', new_next_str)
+    if new_next >= today:
+        await update_client_field(client['id'], 'status', 'active')
+        await asyncio.to_thread(start_bot_service, client['server_folder'])
+
+    try:
+        await bot.send_message(
+            client['client_id'],
+            f"🎉 <b>Botingiz muddati {months} oyga uzaytirildi!</b>\n\n"
+            f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+            f"⏳ Yangi muddat: <b>{new_next_str}</b>\n"
+            f"🟢 Bot serverda faol holatda!",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Failed to notify client: {e}")
+
+    await call.answer(f"✅ {months} oy qo'shildi! Yangi sana: {new_next_str}", show_alert=True)
+    updated_client = await get_client_by_id(client_id)
+    await show_bot_detail_view(call.message, updated_client)
+
+@dp.callback_query(F.data.startswith("adm_add_d_menu:"))
+async def admin_add_days_menu_callback(call: types.CallbackQuery):
+    """Kun qo'shish tanlov menyusini chiqarish."""
+    await call.answer()
+    client_id = int(call.data.split(":")[1])
+    client = await get_client_by_id(client_id)
+    if not client:
+        await call.message.reply("❌ Bot topilmadi!")
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ 1 kun", callback_data=f"adm_add_d:{client_id}:1")
+    builder.button(text="➕ 3 kun", callback_data=f"adm_add_d:{client_id}:3")
+    builder.button(text="➕ 7 kun", callback_data=f"adm_add_d:{client_id}:7")
+    builder.button(text="➕ 10 kun", callback_data=f"adm_add_d:{client_id}:10")
+    builder.button(text="➕ 15 kun", callback_data=f"adm_add_d:{client_id}:15")
+    builder.button(text="➕ 30 kun", callback_data=f"adm_add_d:{client_id}:30")
+    builder.button(text="✍️ Qo'lda kiritish", callback_data=f"adm_custom_d:{client_id}")
+    builder.button(text="⬅️ Orqaga", callback_data=f"manage_bot:{client_id}")
+    builder.adjust(3, 3, 1, 1)
+
+    text = (
+        f"📅 <b>Kun qo'shish:</b>\n\n"
+        f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+        f"⏳ Hozirgi muddat: <b>{client['next_payment_date']}</b>\n\n"
+        f"Necha kun qo'shmoqchisiz?"
+    )
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data.startswith("adm_add_d:"))
+async def admin_add_days_exec_callback(call: types.CallbackQuery):
+    """Tanlangan kunlarni bot muddatiga qo'shish."""
+    await call.answer()
+    parts = call.data.split(":")
+    client_id = int(parts[1])
+    days = int(parts[2])
+    client = await get_client_by_id(client_id)
+    if not client:
+        await call.message.reply("❌ Bot topilmadi!")
+        return
+
+    today = datetime.now().date()
+    current_next = client['next_payment_date']
+    base_date = today if current_next < today else current_next
+    new_next = base_date + timedelta(days=days)
+    new_next_str = new_next.strftime("%Y-%m-%d")
+
+    await update_client_field(client['id'], 'next_payment_date', new_next_str)
+    if new_next >= today:
+        await update_client_field(client['id'], 'status', 'active')
+        await asyncio.to_thread(start_bot_service, client['server_folder'])
+
+    try:
+        await bot.send_message(
+            client['client_id'],
+            f"🎉 <b>Botingiz muddati {days} kunga uzaytirildi!</b>\n\n"
+            f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+            f"⏳ Yangi muddat: <b>{new_next_str}</b>\n"
+            f"🟢 Bot serverda faol holatda!",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Failed to notify client: {e}")
+
+    await call.answer(f"✅ {days} kun qo'shildi! Yangi sana: {new_next_str}", show_alert=True)
+    updated_client = await get_client_by_id(client_id)
+    await show_bot_detail_view(call.message, updated_client)
+
+@dp.callback_query(F.data.startswith("adm_custom_m:"))
+async def admin_custom_month_prompt(call: types.CallbackQuery, state: FSMContext):
+    """Qo'lda oy kiritish so'rovi."""
+    await call.answer()
+    client_id = int(call.data.split(":")[1])
+    await state.update_data(target_client_id=client_id)
+    await state.set_state(AdminQuickDurationState.waiting_for_custom_months)
+    await call.message.answer("✍️ Necha oy qo'shmoqchisiz? (Faqat butun son kiriting, masalan: 5):", reply_markup=get_cancel_keyboard())
+
+@dp.message(AdminQuickDurationState.waiting_for_custom_months)
+async def admin_custom_month_input(message: types.Message, state: FSMContext):
+    """Kiritilgan oylarni muddatga qo'shish."""
+    text = message.text.strip()
+    if is_menu_button_or_command(text):
+        await state.clear()
+        return
+    if not text.isdigit() or int(text) <= 0:
+        await message.answer("❌ Iltimos, musbat butun son kiriting:")
+        return
+    months = int(text)
+    data = await state.get_data()
+    client_id = data['target_client_id']
+    await state.clear()
+    
+    client = await get_client_by_id(client_id)
+    if not client:
+        await message.answer("❌ Bot topilmadi!")
+        return
+
+    today = datetime.now().date()
+    current_next = client['next_payment_date']
+    base_date = today if current_next < today else current_next
+    new_next = add_months(base_date, months)
+    new_next_str = new_next.strftime("%Y-%m-%d")
+
+    await update_client_field(client['id'], 'next_payment_date', new_next_str)
+    if new_next >= today:
+        await update_client_field(client['id'], 'status', 'active')
+        await asyncio.to_thread(start_bot_service, client['server_folder'])
+
+    try:
+        await bot.send_message(
+            client['client_id'],
+            f"🎉 <b>Botingiz muddati {months} oyga uzaytirildi!</b>\n\n"
+            f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+            f"⏳ Yangi muddat: <b>{new_next_str}</b>\n"
+            f"🟢 Bot serverda faol holatda!",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Failed to notify client: {e}")
+
+    await message.answer(f"✅ <b>{months} oy qo'shildi!</b> Yangi sana: <b>{new_next_str}</b>", parse_mode="HTML")
+    updated_client = await get_client_by_id(client_id)
+    await show_bot_detail_view(message, updated_client)
+
+@dp.callback_query(F.data.startswith("adm_custom_d:"))
+async def admin_custom_days_prompt(call: types.CallbackQuery, state: FSMContext):
+    """Qo'lda kun kiritish so'rovi."""
+    await call.answer()
+    client_id = int(call.data.split(":")[1])
+    await state.update_data(target_client_id=client_id)
+    await state.set_state(AdminQuickDurationState.waiting_for_custom_days)
+    await call.message.answer("✍️ Necha kun qo'shmoqchisiz? (Faqat butun son kiriting, masalan: 14):", reply_markup=get_cancel_keyboard())
+
+@dp.message(AdminQuickDurationState.waiting_for_custom_days)
+async def admin_custom_days_input(message: types.Message, state: FSMContext):
+    """Kiritilgan kunlarni muddatga qo'shish."""
+    text = message.text.strip()
+    if is_menu_button_or_command(text):
+        await state.clear()
+        return
+    if not text.isdigit() or int(text) <= 0:
+        await message.answer("❌ Iltimos, musbat butun son kiriting:")
+        return
+    days = int(text)
+    data = await state.get_data()
+    client_id = data['target_client_id']
+    await state.clear()
+    
+    client = await get_client_by_id(client_id)
+    if not client:
+        await message.answer("❌ Bot topilmadi!")
+        return
+
+    today = datetime.now().date()
+    current_next = client['next_payment_date']
+    base_date = today if current_next < today else current_next
+    new_next = base_date + timedelta(days=days)
+    new_next_str = new_next.strftime("%Y-%m-%d")
+
+    await update_client_field(client['id'], 'next_payment_date', new_next_str)
+    if new_next >= today:
+        await update_client_field(client['id'], 'status', 'active')
+        await asyncio.to_thread(start_bot_service, client['server_folder'])
+
+    try:
+        await bot.send_message(
+            client['client_id'],
+            f"🎉 <b>Botingiz muddati {days} kunga uzaytirildi!</b>\n\n"
+            f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+            f"⏳ Yangi muddat: <b>{new_next_str}</b>\n"
+            f"🟢 Bot serverda faol holatda!",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Failed to notify client: {e}")
+
+    await message.answer(f"✅ <b>{days} kun qo'shildi!</b> Yangi sana: <b>{new_next_str}</b>", parse_mode="HTML")
+    updated_client = await get_client_by_id(client_id)
+    await show_bot_detail_view(message, updated_client)
 
 # ==============================================================================
 # 19-BO'LIM: FOYDALANUVCHI KABINETI VA UZAYTIRISHLAR
@@ -2477,7 +2821,7 @@ async def process_renew_bot_callback(call: types.CallbackQuery, state: FSMContex
 
 @dp.callback_query(F.data.startswith("ren_dur:"))
 async def process_renew_duration_callback(call: types.CallbackQuery, state: FSMContext):
-    """Uzaytirish muddatini saqlash, narxni hisoblash va to'lov usulini so'rash."""
+    """Uzaytirish muddatini saqlash, narxni hisoblash va darhol karta to'lov ma'lumotlarini ko'rsatish."""
     await call.answer()
     parts = call.data.split(":")
     bot_id = int(parts[1])
@@ -2489,6 +2833,7 @@ async def process_renew_duration_callback(call: types.CallbackQuery, state: FSMC
         return
         
     total_price = float(client['monthly_price']) * months
+    card_num = await get_setting("card_number", "8600 0000 0000 0000")
     
     await state.update_data(
         renewing_bot_id=bot_id,
@@ -2497,28 +2842,37 @@ async def process_renew_duration_callback(call: types.CallbackQuery, state: FSMC
         renewing_bot_username=client['bot_username'],
         renewing_bot_token=client['bot_token']
     )
+    await state.set_state(BuyBotState.waiting_for_receipt)
     
-    text = (
-        f"⚙️ <b>Uzaytirish muddati:</b> {months} oy\n"
+    pay_text = (
+        f"💳 <b>KARTA ORQALI TO'LOV (BOTNI UZAYTIRISH)</b>\n\n"
+        f"🤖 <b>Bot:</b> {client['bot_username']}\n"
+        f"⏳ <b>Uzaytirish muddati:</b> {months} oy\n"
         f"💰 <b>Umumiy to'lov:</b> <b>{int(total_price):,} som</b>\n\n"
-        f"To'lov usulini tanlang:"
+        f"💳 <b>To'lov uchun karta raqami:</b>\n"
+        f"<code>{card_num}</code>\n\n"
+        f"📲 Iltimos, yuqoridagi kartaga to'lov qiling.\n\n"
+        f"📸 To'lovdan so'ng <b>CHEKINI (skrinshot yoki rasmini)</b> rasm yoki fayl ko'rinishida shu yerga yuboring:"
     )
     
     builder = InlineKeyboardBuilder()
-    builder.button(text="💳 Telegram orqali tezkor to'lov (Click/Payme)", callback_data=f"ren_pay:{bot_id}:{months}:telegram")
-    builder.button(text="👤 Karta orqali (Chek yuborish)", callback_data=f"ren_pay:{bot_id}:{months}:card")
-    builder.adjust(1, 1)
+    builder.button(text="📋 Kartani nusxalash", callback_data=f"copy_card:{card_num}")
+    builder.adjust(1)
     
-    await call.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await call.message.answer(pay_text, parse_mode="HTML", reply_markup=get_cancel_keyboard())
+    await call.message.answer("To'lov kartasi:", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("ren_pay:"))
 async def process_renew_payment_method_callback(call: types.CallbackQuery, state: FSMContext):
-    """Uzaytirish uchun tanlangan to'lov yo'nalishini bajarish."""
+    """Eski tugmalar bosilganda ham kartani ko'rsatish."""
     await call.answer()
     parts = call.data.split(":")
     bot_id = int(parts[1])
     months = int(parts[2])
-    method = parts[3]
     
     client = await get_client_by_id(bot_id)
     if not client:
@@ -2526,65 +2880,37 @@ async def process_renew_payment_method_callback(call: types.CallbackQuery, state
         return
         
     total_price = float(client['monthly_price']) * months
+    card_num = await get_setting("card_number", "8600 0000 0000 0000")
     
-    if method == "telegram":
-        prov_token = await get_setting("provider_token", "")
-        if not prov_token:
-            await call.message.edit_text(
-                "⚠️ <b>Telegram orqali tezkor to'lov faollashtirilmagan!</b>\n\n"
-                "Iltimos, pastdagi Karta orqali to'lov tugmasini bosing:",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardBuilder().button(text="👤 Karta orqali to'lov", callback_data=f"ren_pay:{bot_id}:{months}:card").as_markup()
-            )
-            return
-            
+    await state.update_data(
+        renewing_bot_id=bot_id,
+        renewing_months=months,
+        renewing_total=total_price,
+        renewing_bot_username=client['bot_username'],
+        renewing_bot_token=client['bot_token']
+    )
+    await state.set_state(BuyBotState.waiting_for_receipt)
+    
+    pay_text = (
+        f"💳 <b>KARTA ORQALI TO'LOV (BOTNI UZAYTIRISH)</b>\n\n"
+        f"🤖 <b>Bot:</b> {client['bot_username']}\n"
+        f"⏳ <b>Muddat:</b> {months} oy\n"
+        f"💰 <b>Umumiy to'lov:</b> <b>{int(total_price):,} som</b>\n\n"
+        f"💳 <b>To'lov uchun karta raqami:</b>\n"
+        f"<code>{card_num}</code>\n\n"
+        f"📸 To'lovdan so'ng <b>CHEKINI (skrinshot yoki rasmini)</b> yuboring:"
+    )
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📋 Kartani nusxalash", callback_data=f"copy_card:{card_num}")
+    builder.adjust(1)
+    
+    try:
         await call.message.delete()
-        prices = [
-            types.LabeledPrice(label=f"Uzaytirish {months} oy - {client['bot_username']}", amount=int(total_price) * 100)
-        ]
-        
-        await bot.send_invoice(
-            chat_id=call.from_user.id,
-            title="Bot muddatini uzaytirish",
-            description=f"Bot: {client['bot_username']} - {months} oylik to'lov",
-            payload=f"renew_invoice:{bot_id}:{months}:{int(total_price)}",
-            provider_token=prov_token,
-            currency="UZS",
-            prices=prices,
-            start_parameter="renew-bot-invoice"
-        )
-        
-    elif method == "card":
-        card_num = await get_setting("card_number", "8600 0000 0000 0000")
-        await state.update_data(
-            renewing_bot_id=bot_id,
-            renewing_months=months,
-            renewing_total=total_price,
-            renewing_bot_username=client['bot_username'],
-            renewing_bot_token=client['bot_token']
-        )
-        await state.set_state(BuyBotState.waiting_for_receipt)
-        
-        pay_text = (
-            f"💳 <b>KARTA ORQALI TO'LOV (BOTNI UZAYTIRISH)</b>\n\n"
-            f"🤖 <b>Bot:</b> {client['bot_username']}\n"
-            f"⏳ <b>Muddat:</b> {months} oy\n"
-            f"💰 <b>Umumiy to'lov:</b> <b>{int(total_price):,} som</b>\n\n"
-            f"💳 <b>Karta raqami:</b>\n"
-            f"<code>{card_num}</code>\n\n"
-            f"📲 Click / Payme / Uzum ilovalari orqali to'lov qiling.\n\n"
-            f"📸 To'lovdan so'ng <b>CHEKINI (skrinshot)</b> rasm yoki hujjat ko'rinishida shu yerga yuboring:"
-        )
-        
-        builder = InlineKeyboardBuilder()
-        builder.button(text="📲 Click App", url="https://click.uz")
-        builder.button(text="📲 Payme App", url="https://payme.uz")
-        builder.button(text="📋 Kartani nusxalash", callback_data=f"copy_card:{card_num}")
-        builder.adjust(2, 1)
-        
-        await call.message.delete()
-        await call.message.answer(pay_text, parse_mode="HTML", reply_markup=get_cancel_keyboard())
-        await call.message.answer("To'lov ilovalari:", reply_markup=builder.as_markup())
+    except Exception:
+        pass
+    await call.message.answer(pay_text, parse_mode="HTML", reply_markup=get_cancel_keyboard())
+    await call.message.answer("To'lov kartasi:", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data.startswith("copy_card:"))
 async def process_copy_card_callback(call: types.CallbackQuery):
@@ -2661,51 +2987,43 @@ async def check_payments_and_notify(manual_admin_id: int = None):
                 msg = (
                     f"⚠️ <b>Botingizning oylik to'lov muddati tugashiga 3 kun qoldi!</b>\n\n"
                     f"🤖 <b>Bot:</b> {bot_un}\n"
-                    f"📅 <b>To'lov sanasi:</b> {n_date}\n"
+                    f"📅 <b>Tugash sanasi:</b> {n_date}\n"
                     f"💰 <b>Oylik to'lov:</b> {int(c['monthly_price']):,} som\n\n"
-                    f"🔄 Botni uzaytirish uchun <b>Mening botlarim va to'lovlarim</b> bo'limiga kiring."
+                    f"⏰ Oylik to'lov muddati <b>{n_date}</b> sanasida tugaydi, to'lov qilishga tayyorlaning!\n"
+                    f"🔄 Bot to'xtab qolmasligi uchun <b>Mening botlarim va to'lovlarim</b> bo'limi orqali to'lov qiling."
                 )
             elif rem_days == 1 and status == 'active':
                 warning_count += 1
                 msg = (
                     f"⏰ <b>Botingizning oylik to'lov muddati tugashiga 1 kun qoldi!</b>\n\n"
                     f"🤖 <b>Bot:</b> {bot_un}\n"
-                    f"📅 <b>To'lov sanasi:</b> {n_date}\n"
+                    f"📅 <b>Tugash sanasi:</b> {n_date}\n"
                     f"💰 <b>Oylik to'lov:</b> {int(c['monthly_price']):,} som\n\n"
-                    f"🚨 Ertaga botingiz faoliyati to'xtatilishi mumkin! Iltimos, uzaytirish uchun o'z vaqtida to'lov qiling."
+                    f"🚨 Ertaga botingiz faoliyati to'xtatiladi! Iltimos, o'z vaqtida to'lov qiling."
                 )
-            elif rem_days == 0 and status == 'active':
-                warning_count += 1
-                msg = (
-                    f"🚨 <b>Botingizning oylik to'lov muddati BUGUN tugaydi!</b>\n\n"
-                    f"🤖 <b>Bot:</b> {bot_un}\n"
-                    f"📅 <b>To'lov sanasi:</b> {n_date}\n"
-                    f"💰 <b>Oylik to'lov:</b> {int(c['monthly_price']):,} som\n\n"
-                    f"Iltimos, bot faoliyati to'xtab qolmasligi uchun bugun to'lov qiling!"
-                )
-            elif rem_days < 0:
-                # To'lov muddati tugagan -> Serverdagi bot service-ni to'xtatish (stop)
-                stop_bot_service(folder)
+            elif rem_days <= 0:
+                # To'lov muddati kelgan yoki o'tgan -> Masofaviy SSH serverdagi bot service-ni to'xtatish (stop)
+                await asyncio.to_thread(stop_bot_service, folder)
                 stopped_count += 1
                 
                 if status == 'active':
                     await update_client_field(c['id'], 'status', 'expired')
                     msg = (
-                        f"🔴 <b>Botingizning oylik to'lov muddati tugadi va bot serverda to'xtatildi!</b>\n\n"
+                        f"🔴 <b>Botingizning oylik to'lov muddati tugadi va bot masofaviy serverda to'xtatildi!</b>\n\n"
                         f"🤖 <b>Bot:</b> {bot_un}\n"
-                        f"📅 <b>Muddati:</b> {n_date}\n\n"
-                        f"🔄 Botni qayta faollashtirish uchun admin bilan bog'laning yoki to'lov qiling."
+                        f"📅 <b>Tugagan sana:</b> {n_date}\n\n"
+                        f"🔄 Botni qayta faollashtirish uchun <b>Mening botlarim va to'lovlarim</b> bo'limidan to'lov qiling yoki admin bilan bog'laning."
                     )
                     for admin_id in ADMINS:
                         try:
                             await bot.send_message(
                                 admin_id,
-                                text=f"🚨 <b>Mijoz boti to'lov muddati o'tib ketgani uchun TO'XTATILDI!</b>\n\n"
+                                text=f"🚨 <b>Mijoz boti to'lov muddati tugagani sababli TO'XTATILDI!</b>\n\n"
                                      f"🆔 ID: #{c['id']}\n"
                                      f"👤 Mijoz ID: <code>{client_id}</code>\n"
                                      f"🤖 Bot: {bot_un}\n"
                                      f"📁 Papka: <code>{folder}</code>\n"
-                                     f"📅 Muddati: {n_date}",
+                                     f"📅 Tugagan sana: {n_date}",
                                 parse_mode="HTML"
                             )
                         except Exception as e:
