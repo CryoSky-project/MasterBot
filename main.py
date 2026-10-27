@@ -2,6 +2,7 @@
 # 1-BO'LIM: KUTUBXONALARNI IMPORT QILISH VA BOSH KOD
 # ==============================================================================
 import os
+import io
 import re
 import asyncio
 import logging
@@ -27,8 +28,10 @@ from database import (
     init_db, add_user, get_all_users, add_client_bot, get_all_clients,
     get_client_by_id, update_client_field, delete_client_bot,
     get_client_bots_by_user, get_setting, set_setting, create_order,
-    get_order_by_id, update_order_status, search_clients
+    get_order_by_id, update_order_status, search_clients,
+    is_receipt_hash_used, save_receipt_hash
 )
+from receipt_ai import verify_receipt_with_ai, compute_image_hash
 
 # Muhit o'zgaruvchilarini yuklash
 load_dotenv()
@@ -372,8 +375,9 @@ def get_modes_settings_keyboard():
     builder.button(text="🤖 Bot narxini o'zgartirish")
     builder.button(text="💳 Karta raqamini o'zgartirish")
     builder.button(text="🤖 Auto Bot Yaratish")
+    builder.button(text="🧾 Auto Chek (AI)")
     builder.button(text="⬅️ Orqaga")
-    builder.adjust(2, 2, 1, 1)
+    builder.adjust(2, 2, 2, 1)
     return builder.as_markup(resize_keyboard=True)
 
 def get_cancel_keyboard():
@@ -605,9 +609,11 @@ async def modes_panel_handler(message: types.Message, state: FSMContext):
     card_num = await get_setting("card_number", "8600 0000 0000 0000")
     prov_tok = await get_setting("provider_token", "")
     auto_create = await get_setting("auto_create_bot", "false")
+    auto_check = await get_setting("auto_check_receipt", "false")
     
     prov_tok_status = "⚠️ Sozlanmagan (Telegram to'lovlari ishlamaydi)" if not prov_tok else "🟢 Sozlangan (Click/Payme)"
     auto_create_status = "🟢 Yoqilgan (Faol)" if auto_create == "true" else "🔴 O'chirilgan"
+    auto_check_status = "🟢 Yoqilgan (Faol)" if auto_check == "true" else "🔴 O'chirilgan"
     
     text = (
         f"💳 <b>Karta va Rejimlar Narxlari:</b>\n\n"
@@ -616,7 +622,8 @@ async def modes_panel_handler(message: types.Message, state: FSMContext):
         f"🌐 <b>Webhook rejimi narxi:</b> {int(float(web_price)):,} som / oy\n"
         f"💳 <b>Karta raqami:</b> <code>{card_num}</code>\n"
         f"🔑 <b>Telegram to'lov tokeni:</b> {prov_tok_status}\n"
-        f"🤖 <b>Auto Bot Yaratish:</b> {auto_create_status}\n\n"
+        f"🤖 <b>Auto Bot Yaratish:</b> {auto_create_status}\n"
+        f"🧾 <b>AI Auto-Chek tekshiruvi:</b> {auto_check_status}\n\n"
         f"O'zgartirish uchun quyidagi tugmalardan birini bosing:"
     )
     await message.answer(text, parse_mode="HTML", reply_markup=get_modes_settings_keyboard())
@@ -633,6 +640,20 @@ async def toggle_auto_create_bot(message: types.Message, state: FSMContext):
     
     status_text = "yoqildi (Faol)" if new_val == "true" else "o'chirildi"
     await message.answer(f"✅ <b>Avtomatik bot yaratish tizimi {status_text}!</b>", parse_mode="HTML")
+    await modes_panel_handler(message, state)
+
+@dp.message(F.text == "🧾 Auto Chek (AI)")
+async def toggle_auto_check_receipt(message: types.Message, state: FSMContext):
+    """Avtonom AI chek tekshiruv tizimini yoqish/o'chirish."""
+    if message.from_user.id not in ADMINS:
+        return
+    await state.clear()
+    current = await get_setting("auto_check_receipt", "false")
+    new_val = "false" if current == "true" else "true"
+    await set_setting("auto_check_receipt", new_val)
+    
+    status_text = "yoqildi (Faol)" if new_val == "true" else "o'chirildi"
+    await message.answer(f"✅ <b>AI Auto-Chek tekshiruvi {status_text}!</b>", parse_mode="HTML")
     await modes_panel_handler(message, state)
 
 @dp.message(F.text == "⚡️ Polling narxini o'zgartirish")
@@ -1186,15 +1207,23 @@ async def process_successful_payment(message: types.Message, state: FSMContext):
                 pass
 
 # ==============================================================================
-# 13-BO'LIM: TO'LOV CHEKLARINI QO'LDA TEKSHIRISH
+# 13-BO'LIM: TO'LOV CHEKLARINI TEKSHIRISH (AVTONOM AI VA QO'LDA)
 # ==============================================================================
+async def download_telegram_file_bytes(bot: Bot, file_id: str) -> bytes:
+    """Telegramdan faylni xotiraga (bytes) yuklab olish."""
+    file_obj = await bot.get_file(file_id)
+    io_buf = io.BytesIO()
+    await bot.download_file(file_obj.file_path, destination=io_buf)
+    return io_buf.getvalue()
+
 @dp.message(BuyBotState.waiting_for_receipt, F.photo | F.document)
 async def process_user_receipt(message: types.Message, state: FSMContext):
-    """Yangi bot buyurtmalari va uzaytirishlar uchun karta to'lov cheklarini qayta ishlash."""
+    """Yangi bot buyurtmalari va uzaytirishlar uchun to'lov cheklarini qayta ishlash."""
     file_id = message.photo[-1].file_id if message.photo else message.document.file_id
     
     data = await state.get_data()
     renewing_bot_id = data.get("renewing_bot_id")
+    auto_check = await get_setting("auto_check_receipt", "false")
     
     if renewing_bot_id:
         months = data["renewing_months"]
@@ -1212,6 +1241,161 @@ async def process_user_receipt(message: types.Message, state: FSMContext):
         )
         await state.clear()
         
+        # 1. AVTONOM AI CHEK TEKSHIRUVI FAOLLASHTIRILGAN BO'LSA
+        if auto_check == "true":
+            img_bytes = None
+            try:
+                img_bytes = await download_telegram_file_bytes(bot, file_id)
+            except Exception as e:
+                logging.error(f"Failed to download receipt for renewal order #{order_id}: {e}")
+                
+            img_hash = compute_image_hash(img_bytes) if img_bytes else None
+            is_dup = await is_receipt_hash_used(img_hash) if img_hash else False
+            
+            if is_dup:
+                ai_res = {
+                    "status": "rejected",
+                    "reason": "Ushbu to'lov cheki avval ishlatilgan (dublikat chek aniqlandi).",
+                    "is_older_than_24h": False,
+                    "is_fake": True
+                }
+            elif img_bytes:
+                ai_res = await verify_receipt_with_ai(img_bytes, total)
+            else:
+                ai_res = {
+                    "status": "rejected",
+                    "reason": "To'lov chekini yuklab olishda xatolik yuz berdi.",
+                    "is_older_than_24h": False,
+                    "is_fake": False
+                }
+                
+            # 1.1. Chek 24 soatdan oshib ketgan bo'lsa
+            if ai_res["status"] == "older_24h":
+                user_msg = (
+                    f"⚠️ <b>Avtonom tekshiruv yakunlandi.</b>\n\n"
+                    f"Siz yuborgan to'lov cheki shubhali deb topildi (24 soatdan oshib ketgan).\n"
+                    f"Ushbu chek adminga jo'natildi. Admin chekni tasdiqlashini kuting!"
+                )
+                await message.answer(user_msg, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=(message.from_user.id in ADMINS)))
+                
+                admin_builder = InlineKeyboardBuilder()
+                admin_builder.button(text="✅ Qo'lda tasdiqlash", callback_data=f"aord_approve:{order_id}")
+                admin_builder.button(text="❌ Rad etish", callback_data=f"aord_reject:{order_id}")
+                admin_builder.adjust(1, 1)
+                
+                admin_msg = (
+                    f"⚠️ <b>DIQQAT: CHEK 24 SOATDAN OSHIB KETGAN! (№#{order_id})</b>\n\n"
+                    f"👤 Xaridor ID: <code>{message.from_user.id}</code> (@{message.from_user.username or 'yoq'})\n"
+                    f"🤖 Bot Username: {bot_un}\n"
+                    f"⚙️ Rejimi: UZAYTIRISH ({months} oy)\n"
+                    f"💰 To'lov summasi: {int(total):,} som\n"
+                    f"⚠️ <b>AI Xulosasi:</b> {ai_res['reason']}\n\n"
+                    f"Chekni tekshirib, qaror qabul qiling:"
+                )
+                for admin_id in ADMINS:
+                    try:
+                        await bot.send_photo(admin_id, photo=file_id, caption=admin_msg, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                    except Exception:
+                        try:
+                            await bot.send_message(admin_id, text=admin_msg + "\n⚠️ (Chek rasmini yuborib bo'lmadi)", parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                        except Exception:
+                            pass
+                return
+
+            # 1.2. Chek soxta, montaj yoki yetarli bo'lmasa
+            elif ai_res["status"] == "rejected":
+                user_msg = (
+                    f"❌ <b>Avtonom bot sizning chekingizni yaroqsiz deb topdi.</b>\n\n"
+                    f"Sababi: <i>{ai_res['reason']}</i>\n"
+                    f"Chek adminga jo'natildi. Admin chekni tasdiqlashini kuting!"
+                )
+                await message.answer(user_msg, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=(message.from_user.id in ADMINS)))
+                
+                admin_builder = InlineKeyboardBuilder()
+                admin_builder.button(text="✅ Qo'lda tasdiqlash", callback_data=f"aord_approve:{order_id}")
+                admin_builder.button(text="❌ Rad etish", callback_data=f"aord_reject:{order_id}")
+                admin_builder.adjust(1, 1)
+                
+                admin_msg = (
+                    f"❌ <b>DIQQAT: CHEK YAROQSIZ / SOXTA DEB TOPILDI! (№#{order_id})</b>\n\n"
+                    f"👤 Xaridor ID: <code>{message.from_user.id}</code> (@{message.from_user.username or 'yoq'})\n"
+                    f"🤖 Bot Username: {bot_un}\n"
+                    f"⚙️ Rejimi: UZAYTIRISH ({months} oy)\n"
+                    f"💰 To'lov summasi: {int(total):,} som\n"
+                    f"❌ <b>AI Xulosasi:</b> {ai_res['reason']}\n\n"
+                    f"Chekni tekshirib, qaror qabul qiling:"
+                )
+                for admin_id in ADMINS:
+                    try:
+                        await bot.send_photo(admin_id, photo=file_id, caption=admin_msg, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                    except Exception:
+                        try:
+                            await bot.send_message(admin_id, text=admin_msg + "\n⚠️ (Chek rasmini yuborib bo'lmadi)", parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                        except Exception:
+                            pass
+                return
+
+            # 1.3. AI chekni to'liq tasdiqlagan bo'lsa
+            else:
+                if img_hash:
+                    await save_receipt_hash(img_hash, order_id, message.from_user.id)
+                    
+                await message.answer("✅ <b>Avtonom bot chekni tasdiqladi!</b>\n\nBotingiz ishga tushirilmoqda...", parse_mode="HTML")
+                
+                today = datetime.now().date()
+                from database import get_db
+                p = await get_db()
+                async with p.acquire() as conn:
+                    client = await conn.fetchrow(
+                        "SELECT * FROM master_clients WHERE client_id = $1 AND bot_username = $2 ORDER BY id DESC LIMIT 1;",
+                        message.from_user.id, bot_un
+                    )
+                if client:
+                    current_next = client['next_payment_date']
+                    base_date = today if current_next < today else current_next
+                    new_next = add_months(base_date, months)
+                    new_next_str = new_next.strftime("%Y-%m-%d")
+                    today_str = today.strftime("%Y-%m-%d")
+                    
+                    await update_client_field(client['id'], 'next_payment_date', new_next_str)
+                    await update_client_field(client['id'], 'last_payment_date', today_str)
+                    await update_client_field(client['id'], 'status', 'active')
+                    await asyncio.to_thread(start_bot_service, client['server_folder'])
+                    await update_order_status(order_id, "approved")
+                    
+                    await message.answer(
+                        f"🎉 <b>Botingiz muvaffaqiyatli ishga tushirildi!</b>\n\n"
+                        f"🤖 Bot: <b>{bot_un}</b>\n"
+                        f"⏳ Yangi to'lov muddati: <b>{new_next_str}</b>",
+                        parse_mode="HTML",
+                        reply_markup=get_client_user_keyboard(is_admin=(message.from_user.id in ADMINS))
+                    )
+                    
+                admin_builder = InlineKeyboardBuilder()
+                admin_builder.button(text="✅ Qabul qilindi (OK)", callback_data=f"aord_auto_ok:{order_id}")
+                admin_builder.button(text="🚫 Bekor qilish (Botni o'chirish)", callback_data=f"aord_cancel_auto:{order_id}")
+                admin_builder.adjust(1, 1)
+                
+                admin_msg = (
+                    f"🔔 <b>YANGI UZAYTIRISH BUYURTMASI (№#{order_id}) - AI TASDIQLADI</b>\n\n"
+                    f"👤 Xaridor ID: <code>{message.from_user.id}</code> (@{message.from_user.username or 'yoq'})\n"
+                    f"🤖 Bot Username: {bot_un}\n"
+                    f"⚙️ Rejimi: UZAYTIRISH ({months} oy)\n"
+                    f"💰 To'lov summasi: {int(total):,} som\n\n"
+                    f"✅ <b>AI Xulosasi:</b> {ai_res.get('reason', 'Tasdiqlandi')}\n"
+                    f"🚀 <i>Bot avtomatik tarzda uzaytirildi va ishga tushirildi. Agar chek noo'rin bo'lsa, quyidagi 'Bekor qilish' tugmasi orqali to'xtatishingiz mumkin:</i>"
+                )
+                for admin_id in ADMINS:
+                    try:
+                        await bot.send_photo(admin_id, photo=file_id, caption=admin_msg, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                    except Exception:
+                        try:
+                            await bot.send_message(admin_id, text=admin_msg + "\n⚠️ (Chek rasmini yuborib bo'lmadi)", parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                        except Exception:
+                            pass
+                return
+
+        # 2. AVTONOM REJIM O'CHIRILGAN BO'LSA (QO'LDA TEKSHIRISH)
         user_msg = (
             f"🎉 <b>Uzaytirish to'lov chekingiz qabul qilindi!</b>\n\n"
             f"🆔 Buyurtma №: #{order_id}\n"
@@ -1222,7 +1406,6 @@ async def process_user_receipt(message: types.Message, state: FSMContext):
         )
         await message.answer(user_msg, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=(message.from_user.id in ADMINS)))
         
-        # Adminlarni xabardor qilish
         admin_builder = InlineKeyboardBuilder()
         admin_builder.button(text="✅ Uzaytirishni Tasdiqlash", callback_data=f"aord_approve:{order_id}")
         admin_builder.button(text="❌ Rad etish", callback_data=f"aord_reject:{order_id}")
@@ -1246,7 +1429,7 @@ async def process_user_receipt(message: types.Message, state: FSMContext):
                     pass
         return
 
-    # Purchase flow
+    # Purchase flow (Yangi bot xarid qilish)
     order_id = data.get("buy_order_id")
     actual_username = data.get("actual_username")
     token = data.get("bot_token")
@@ -1261,6 +1444,162 @@ async def process_user_receipt(message: types.Message, state: FSMContext):
         
     await state.clear()
     
+    # 1. AVTONOM AI CHEK TEKSHIRUVI FAOLLASHTIRILGAN BO'LSA
+    if auto_check == "true":
+        img_bytes = None
+        try:
+            img_bytes = await download_telegram_file_bytes(bot, file_id)
+        except Exception as e:
+            logging.error(f"Failed to download receipt for purchase order #{order_id}: {e}")
+            
+        img_hash = compute_image_hash(img_bytes) if img_bytes else None
+        is_dup = await is_receipt_hash_used(img_hash) if img_hash else False
+        
+        if is_dup:
+            ai_res = {
+                "status": "rejected",
+                "reason": "Ushbu to'lov cheki avval ishlatilgan (dublikat chek aniqlandi).",
+                "is_older_than_24h": False,
+                "is_fake": True
+            }
+        elif img_bytes:
+            ai_res = await verify_receipt_with_ai(img_bytes, total)
+        else:
+            ai_res = {
+                "status": "rejected",
+                "reason": "To'lov chekini yuklab olishda xatolik yuz berdi.",
+                "is_older_than_24h": False,
+                "is_fake": False
+            }
+            
+        # 1.1. Chek 24 soatdan oshib ketgan bo'lsa
+        if ai_res["status"] == "older_24h":
+            user_msg = (
+                f"⚠️ <b>Avtonom tekshiruv yakunlandi.</b>\n\n"
+                f"Siz yuborgan to'lov cheki shubhali deb topildi (24 soatdan oshib ketgan).\n"
+                f"Ushbu chek adminga jo'natildi. Admin chekni tasdiqlashini kuting!"
+            )
+            await message.answer(user_msg, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=(user_id in ADMINS)))
+            
+            admin_builder = InlineKeyboardBuilder()
+            admin_builder.button(text="✅ Qo'lda tasdiqlash", callback_data=f"aord_approve:{order_id}")
+            admin_builder.button(text="❌ Rad etish", callback_data=f"aord_reject:{order_id}")
+            admin_builder.adjust(1, 1)
+            
+            admin_msg = (
+                f"⚠️ <b>DIQQAT: CHEK 24 SOATDAN OSHIB KETGAN! (№#{order_id})</b>\n\n"
+                f"👤 Xaridor ID: <code>{user_id}</code> (@{message.from_user.username or 'yoq'})\n"
+                f"🤖 Bot Username: {actual_username}\n"
+                f"🔑 Bot Token: <code>{token}</code>\n"
+                f"⚙️ Rejimi: {mode.upper()}\n"
+                f"💰 To'lov summasi: {int(total):,} som\n"
+                f"⚠️ <b>AI Xulosasi:</b> {ai_res['reason']}\n\n"
+                f"Chekni tekshirib, qaror qabul qiling:"
+            )
+            for admin_id in ADMINS:
+                try:
+                    await bot.send_photo(admin_id, photo=file_id, caption=admin_msg, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                except Exception:
+                    try:
+                        await bot.send_message(admin_id, text=admin_msg + "\n⚠️ (Chek rasmini yuborib bo'lmadi)", parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                    except Exception:
+                        pass
+            return
+
+        # 1.2. Chek soxta, montaj yoki yetarli bo'lmasa
+        elif ai_res["status"] == "rejected":
+            user_msg = (
+                f"❌ <b>Avtonom bot sizning chekingizni yaroqsiz deb topdi.</b>\n\n"
+                f"Sababi: <i>{ai_res['reason']}</i>\n"
+                f"Chek adminga jo'natildi. Admin chekni tasdiqlashini kuting!"
+            )
+            await message.answer(user_msg, parse_mode="HTML", reply_markup=get_client_user_keyboard(is_admin=(user_id in ADMINS)))
+            
+            admin_builder = InlineKeyboardBuilder()
+            admin_builder.button(text="✅ Qo'lda tasdiqlash", callback_data=f"aord_approve:{order_id}")
+            admin_builder.button(text="❌ Rad etish", callback_data=f"aord_reject:{order_id}")
+            admin_builder.adjust(1, 1)
+            
+            admin_msg = (
+                f"❌ <b>DIQQAT: CHEK YAROQSIZ / SOXTA DEB TOPILDI! (№#{order_id})</b>\n\n"
+                f"👤 Xaridor ID: <code>{user_id}</code> (@{message.from_user.username or 'yoq'})\n"
+                f"🤖 Bot Username: {actual_username}\n"
+                f"🔑 Bot Token: <code>{token}</code>\n"
+                f"⚙️ Rejimi: {mode.upper()}\n"
+                f"💰 To'lov summasi: {int(total):,} som\n"
+                f"❌ <b>AI Xulosasi:</b> {ai_res['reason']}\n\n"
+                f"Chekni tekshirib, qaror qabul qiling:"
+            )
+            for admin_id in ADMINS:
+                try:
+                    await bot.send_photo(admin_id, photo=file_id, caption=admin_msg, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                except Exception:
+                    try:
+                        await bot.send_message(admin_id, text=admin_msg + "\n⚠️ (Chek rasmini yuborib bo'lmadi)", parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                    except Exception:
+                        pass
+            return
+
+        # 1.3. AI chekni to'liq tasdiqlagan bo'lsa
+        else:
+            if img_hash:
+                await save_receipt_hash(img_hash, order_id, user_id)
+                
+            await message.answer("✅ <b>Avtonom bot chekni tasdiqladi!</b>\n\nBotingiz ishga tushirilmoqda...", parse_mode="HTML")
+            
+            today_date = datetime.now().date()
+            today_str = today_date.strftime("%Y-%m-%d")
+            next_str = add_months(today_date, 1).strftime("%Y-%m-%d")
+            
+            poll_p = float(await get_setting("polling_price", "20000"))
+            web_p = float(await get_setting("webhook_price", "25000"))
+            m_price = poll_p if mode == "polling" else web_p
+            
+            clean_un = re.sub(r'[^a-zA-Z0-9]', '', actual_username).lower()
+            folder_name = f"sky-{clean_un}"
+            
+            await update_order_status(order_id, "approved")
+            await add_client_bot(
+                user_id, actual_username, token,
+                folder_name, mode, m_price, today_str, next_str
+            )
+            await asyncio.to_thread(start_bot_service, folder_name)
+            
+            await message.answer(
+                f"🎉 <b>Botingiz muvaffaqiyatli ishga tushirildi!</b>\n\n"
+                f"🤖 Bot: <b>{actual_username}</b>\n"
+                f"⏳ Keyingi to'lov sanasi: <b>{next_str}</b>",
+                parse_mode="HTML",
+                reply_markup=get_client_user_keyboard(is_admin=(user_id in ADMINS))
+            )
+            
+            admin_builder = InlineKeyboardBuilder()
+            admin_builder.button(text="✅ Qabul qilindi (OK)", callback_data=f"aord_auto_ok:{order_id}")
+            admin_builder.button(text="🚫 Bekor qilish (Botni o'chirish)", callback_data=f"aord_cancel_auto:{order_id}")
+            admin_builder.adjust(1, 1)
+            
+            admin_msg = (
+                f"🔔 <b>YANGI BOT BUYURTMASI (№#{order_id}) - AI TASDIQLADI</b>\n\n"
+                f"👤 Xaridor ID: <code>{user_id}</code> (@{message.from_user.username or 'yoq'})\n"
+                f"🤖 Bot Username: {actual_username}\n"
+                f"🔑 Bot Token: <code>{token}</code>\n"
+                f"⚙️ Rejimi: {mode.upper()}\n"
+                f"📁 Papka: <code>{folder_name}</code>\n"
+                f"💰 To'lov summasi: {int(total):,} som\n\n"
+                f"✅ <b>AI Xulosasi:</b> {ai_res.get('reason', 'Tasdiqlandi')}\n"
+                f"🚀 <i>Bot avtomatik yaratildi va ishga tushirildi. Agar chek noo'rin bo'lsa, 'Bekor qilish' tugmasini bosing:</i>"
+            )
+            for admin_id in ADMINS:
+                try:
+                    await bot.send_photo(admin_id, photo=file_id, caption=admin_msg, parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                except Exception:
+                    try:
+                        await bot.send_message(admin_id, text=admin_msg + "\n⚠️ (Chek rasmini yuborib bo'lmadi)", parse_mode="HTML", reply_markup=admin_builder.as_markup())
+                    except Exception:
+                        pass
+            return
+
+    # 2. AVTONOM REJIM O'CHIRILGAN BO'LSA (QO'LDA TEKSHIRISH)
     user_msg = (
         f"⏳ <b>To'lov chekingiz qabul qilindi va tekshirishga yuborildi.</b>\n\n"
         f"Mablag'lar kelib tushganligi va chekning haqiqiyligini tasdiqlash uchun har bir to'lov admin tomonidan qo'lda tekshiriladi. "
@@ -1302,6 +1641,59 @@ async def process_user_receipt_text_skip(message: types.Message, state: FSMConte
 # ==============================================================================
 # 14-BO'LIM: ADMIN TOMONIDAN BUYURTMALARNI BOSHQARISH VA TASDIQLASH
 # ==============================================================================
+
+@dp.callback_query(F.data.startswith("aord_auto_ok:"))
+async def admin_auto_ok_order(call: types.CallbackQuery):
+    """AI tomonidan tasdiqlangan buyurtmani admin ko'rganligini tasdiqlash."""
+    await call.answer("Qabul qilindi ✅", show_alert=False)
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+@dp.callback_query(F.data.startswith("aord_cancel_auto:"))
+async def admin_cancel_auto_order(call: types.CallbackQuery, state: FSMContext):
+    """AI tasdiqlagan buyurtmani adminga rad etish va botni o'chirish imkonini berish."""
+    await call.answer()
+    order_id = int(call.data.split(":")[1])
+    order = await get_order_by_id(order_id)
+    if not order:
+        await call.message.reply("❌ Buyurtma topilmadi!")
+        return
+        
+    await update_order_status(order_id, "rejected")
+    
+    # Botni to'xtatish va bazadagi holatini yangilash
+    from database import get_db
+    p = await get_db()
+    async with p.acquire() as conn:
+        client = await conn.fetchrow(
+            "SELECT * FROM master_clients WHERE client_id = $1 AND bot_username = $2 ORDER BY id DESC LIMIT 1;",
+            order['user_id'], order['bot_username']
+        )
+        
+    if client:
+        await asyncio.to_thread(stop_bot_service, client['server_folder'])
+        await update_client_field(client['id'], 'status', 'stopped')
+        
+    # Foydalanuvchiga ogohlantirish yuborish
+    try:
+        user_msg = (
+            f"⚠️ <b>OGOHLANTIRISH!</b>\n\n"
+            f"Admin to'lov chekingizni qabul qilmadi (rad etdi). Chek yaroqsiz deb topildi.\n"
+            f"🤖 Botingiz (<b>{order['bot_username']}</b>) avtomatik tarzda to'xtatildi/o'chirildi!"
+        )
+        await bot.send_message(order['user_id'], text=user_msg, parse_mode="HTML")
+    except Exception as e:
+        logging.error(f"Failed to notify user {order['user_id']} of cancellation: {e}")
+        
+    try:
+        await call.message.edit_caption(
+            caption=(call.message.caption or "") + "\n\n❌ <b>ADMIN TOMONIDAN RAD ETILDI VA BOT O'CHIRILDI!</b>",
+            reply_markup=None
+        )
+    except Exception:
+        pass
 
 @dp.callback_query(F.data.startswith("aord_approve:"))
 async def admin_approve_order(call: types.CallbackQuery, state: FSMContext):

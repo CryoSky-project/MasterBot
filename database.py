@@ -48,8 +48,20 @@ async def init_db():
             ('bot_sale_price', '60000'),
             ('card_number', '8600 0000 0000 0000'),
             ('provider_token', ''),
-            ('auto_create_bot', 'false')
+            ('auto_create_bot', 'false'),
+            ('auto_check_receipt', 'false')
             ON CONFLICT (key) DO NOTHING;
+        """)
+
+        # Ishlatilgan to'lov cheklari xesh jadvali (dublikatlarni oldini olish)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS used_receipts (
+                id SERIAL PRIMARY KEY,
+                receipt_hash TEXT UNIQUE NOT NULL,
+                order_id INT,
+                user_id BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # Mijozlar va Botlar jadvali
@@ -226,3 +238,23 @@ async def update_order_status(order_id: int, status: str):
     p = await get_db()
     async with p.acquire() as conn:
         await conn.execute("UPDATE orders SET status = $1 WHERE id = $2;", status, order_id)
+
+# ==============================================================================
+# 6-BO'LIM: TO'LOV CHEKLARI VA DUBLIKATLARNI TEKSHIRISH
+# ==============================================================================
+async def is_receipt_hash_used(receipt_hash: str) -> bool:
+    """To'lov cheki xeshi oldin ishlatilganligini tekshirish."""
+    p = await get_db()
+    async with p.acquire() as conn:
+        val = await conn.fetchval("SELECT id FROM used_receipts WHERE receipt_hash = $1;", receipt_hash)
+        return val is not None
+
+async def save_receipt_hash(receipt_hash: str, order_id: int = None, user_id: int = None):
+    """Yangi to'lov cheki xeshini saqlash."""
+    p = await get_db()
+    async with p.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO used_receipts (receipt_hash, order_id, user_id)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (receipt_hash) DO NOTHING;
+        """, receipt_hash, order_id, user_id)
