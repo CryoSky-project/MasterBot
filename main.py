@@ -34,7 +34,7 @@ from database import (
 from receipt_ai import verify_receipt_with_ai, compute_image_hash
 
 # Muhit o'zgaruvchilarini yuklash
-load_dotenv()
+load_dotenv(override=True)
 
 # Logger sozlamalarini konfiguratsiya qilish
 logging.basicConfig(level=logging.INFO)
@@ -3372,29 +3372,43 @@ async def check_payments_and_notify(manual_admin_id: int = None):
             bot_un = c['bot_username']
             status = c.get('status', 'active')
             folder = c.get('server_folder', '')
+            last_notified = c.get('last_notified_date')
+            already_notified_today = (last_notified == today)
             
             msg = None
             if rem_days == 3 and status == 'active':
-                warning_count += 1
-                msg = (
-                    f"⚠️ <b>Botingizning oylik to'lov muddati tugashiga 3 kun qoldi!</b>\n\n"
-                    f"🤖 <b>Bot:</b> {bot_un}\n"
-                    f"📅 <b>Tugash sanasi:</b> {n_date}\n"
-                    f"💰 <b>Oylik to'lov:</b> {int(c['monthly_price']):,} som\n\n"
-                    f"⏰ Oylik to'lov muddati <b>{n_date}</b> sanasida tugaydi, to'lov qilishga tayyorlaning!\n"
-                    f"🔄 Bot to'xtab qolmasligi uchun <b>Mening botlarim va to'lovlarim</b> bo'limi orqali to'lov qiling."
-                )
+                if not already_notified_today:
+                    warning_count += 1
+                    msg = (
+                        f"⚠️ <b>Botingizning oylik to'lov muddati tugashiga 3 kun qoldi!</b>\n\n"
+                        f"🤖 <b>Bot:</b> {bot_un}\n"
+                        f"📅 <b>Tugash sanasi:</b> {n_date}\n"
+                        f"💰 <b>Oylik to'lov:</b> {int(c['monthly_price']):,} som\n\n"
+                        f"⏰ Oylik to'lov muddati <b>{n_date}</b> sanasida tugaydi, to'lov qilishga tayyorlaning!\n"
+                        f"🔄 Bot to'xtab qolmasligi uchun <b>Mening botlarim va to'lovlarim</b> bo'limi orqali to'lov qiling."
+                    )
             elif rem_days == 1 and status == 'active':
-                warning_count += 1
-                msg = (
-                    f"⏰ <b>Botingizning oylik to'lov muddati tugashiga 1 kun qoldi!</b>\n\n"
-                    f"🤖 <b>Bot:</b> {bot_un}\n"
-                    f"📅 <b>Tugash sanasi:</b> {n_date}\n"
-                    f"💰 <b>Oylik to'lov:</b> {int(c['monthly_price']):,} som\n\n"
-                    f"🚨 Ertaga botingiz faoliyati to'xtatiladi! Iltimos, o'z vaqtida to'lov qiling."
-                )
-            elif rem_days <= 0:
-                # To'lov muddati kelgan yoki o'tgan -> Masofaviy SSH serverdagi bot service-ni to'xtatish (stop)
+                if not already_notified_today:
+                    warning_count += 1
+                    msg = (
+                        f"⏰ <b>Botingizning oylik to'lov muddati tugashiga 1 kun qoldi!</b>\n\n"
+                        f"🤖 <b>Bot:</b> {bot_un}\n"
+                        f"📅 <b>Tugash sanasi:</b> {n_date}\n"
+                        f"💰 <b>Oylik to'lov:</b> {int(c['monthly_price']):,} som\n\n"
+                        f"🚨 Ertaga botingiz faoliyati to'xtatiladi! Iltimos, o'z vaqtida to'lov qiling."
+                    )
+            elif rem_days == 0 and status == 'active':
+                if not already_notified_today:
+                    warning_count += 1
+                    msg = (
+                        f"🚨 <b>Botingizning oylik to'lov muddati BUGUN tugaydi!</b>\n\n"
+                        f"🤖 <b>Bot:</b> {bot_un}\n"
+                        f"📅 <b>Tugash sanasi:</b> {n_date}\n"
+                        f"💰 <b>Oylik to'lov:</b> {int(c['monthly_price']):,} som\n\n"
+                        f"⚠️ Bugun to'lovning so'nggi kuni! Bot to'xtab qolmasligi uchun bugun to'lov qiling."
+                    )
+            elif rem_days < 0:
+                # To'lov muddati o'tgan -> Masofaviy SSH serverdagi bot service-ni to'xtatish (stop)
                 await asyncio.to_thread(stop_bot_service, folder)
                 stopped_count += 1
                 
@@ -3426,6 +3440,7 @@ async def check_payments_and_notify(manual_admin_id: int = None):
             if msg:
                 try:
                     await bot.send_message(client_id, text=msg, parse_mode="HTML")
+                    await update_client_field(c['id'], 'last_notified_date', today)
                 except Exception as e:
                     logging.error(f"Failed to send notification to client {client_id}: {e}")
                     

@@ -7,7 +7,7 @@ import asyncpg
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user_master:pass_master@localhost:5432/db_master")
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
@@ -77,9 +77,14 @@ async def init_db():
                 last_payment_date DATE NOT NULL,
                 next_payment_date DATE NOT NULL,
                 status TEXT DEFAULT 'active',
+                last_notified_date DATE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        try:
+            await conn.execute("ALTER TABLE master_clients ADD COLUMN IF NOT EXISTS last_notified_date DATE;")
+        except Exception:
+            pass
 
         # Bot xaridlari uchun buyurtmalar jadvali
         await conn.execute("""
@@ -172,7 +177,7 @@ async def get_client_by_id(client_record_id: int):
 async def update_client_field(client_record_id: int, field_name: str, value):
     """Mijoz boti yozuvining maydon qiymatlarini dinamik ravishda yangilash."""
     p = await get_db()
-    valid_fields = ['client_id', 'bot_username', 'bot_token', 'server_folder', 'mode', 'monthly_price', 'last_payment_date', 'next_payment_date', 'status']
+    valid_fields = ['client_id', 'bot_username', 'bot_token', 'server_folder', 'mode', 'monthly_price', 'last_payment_date', 'next_payment_date', 'status', 'last_notified_date']
     if field_name not in valid_fields:
         return
     

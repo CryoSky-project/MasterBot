@@ -16,7 +16,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Logger settings configuration
 logging.basicConfig(level=logging.INFO)
