@@ -29,7 +29,8 @@ from database import (
     get_client_by_id, update_client_field, delete_client_bot,
     get_client_bots_by_user, get_setting, set_setting, create_order,
     get_order_by_id, update_order_status, search_clients,
-    is_receipt_hash_used, save_receipt_hash
+    is_receipt_hash_used, save_receipt_hash,
+    get_orders_by_month, get_available_order_months
 )
 from receipt_ai import verify_receipt_with_ai, compute_image_hash
 
@@ -342,9 +343,10 @@ def get_admin_main_keyboard():
     builder.button(text="👤 Mijozlar paneli")
     builder.button(text="🤖 Botlarni boshqarish")
     builder.button(text="📊 Statistika")
+    builder.button(text="🧾 Bu oydagi cheklar")
     builder.button(text="📢 Reklama tarqatish")
     builder.button(text="👤 User paneli")
-    builder.adjust(2, 2, 1)
+    builder.adjust(2, 2, 2)
     return builder.as_markup(resize_keyboard=True)
 
 def get_bot_mgmt_keyboard():
@@ -3348,6 +3350,195 @@ async def admin_stats(message: types.Message):
         f"💰 Oylik umumiy daromad: <b>{int(total_rev):,} som</b>"
     )
     await message.answer(text, parse_mode="HTML")
+
+MONTH_NAMES_UZ = {
+    1: "Yanvar", 2: "Fevral", 3: "Mart", 4: "Aprel",
+    5: "May", 6: "Iyun", 7: "Iyul", 8: "Avgust",
+    9: "Sentabr", 10: "Oktabr", 11: "Noyabr", 12: "Dekabr"
+}
+
+MONTH_NAMES_KK = {
+    1: "Қаңтар", 2: "Ақпан", 3: "Наурыз", 4: "Сәуір",
+    5: "Мамыр", 6: "Маусым", 7: "Шілде", 8: "Тамыз",
+    9: "Қыркүйек", 10: "Қазан", 11: "Қараша", 12: "Желтоқсан"
+}
+
+async def render_month_receipts(year: int, month: int):
+    orders = await get_orders_by_month(year, month)
+    m_name_uz = MONTH_NAMES_UZ.get(month, f"{month}-oy")
+    m_name_kk = MONTH_NAMES_KK.get(month, "")
+    title = f"{m_name_uz} ({m_name_kk}) {year}-yil"
+    
+    total_count = len(orders)
+    new_bots = [o for o in orders if not str(o.get('mode') or '').startswith('renewal:')]
+    renewals = [o for o in orders if str(o.get('mode') or '').startswith('renewal:')]
+    
+    approved_orders = [o for o in orders if o.get('status') == 'approved']
+    pending_orders = [o for o in orders if o.get('status') == 'pending']
+    rejected_orders = [o for o in orders if o.get('status') == 'rejected']
+    
+    approved_rev = sum(o.get('total_price') or 0 for o in approved_orders)
+    
+    header = (
+        f"🧾 <b>{title} — Cheklar va To'lovlar hisoboti</b>\n\n"
+        f"📊 <b>Umumiy statistika / Жалпы санақ:</b>\n"
+        f"• Jami cheklar soni: <b>{total_count} ta</b>\n"
+        f"• ✅ Tasdiqlangan: <b>{len(approved_orders)} ta</b> (<b>{int(approved_rev):,} so'm</b>)\n"
+        f"• ⏳ Kutilayotgan: <b>{len(pending_orders)} ta</b>\n"
+        f"• ❌ Rad etilgan: <b>{len(rejected_orders)} ta</b>\n\n"
+        f"🏷 <b>To'lov turlari bo'yicha:</b>\n"
+        f"• 🛒 Yangi bot xaridi: <b>{len(new_bots)} ta</b>\n"
+        f"• 🔄 Oylik to'lov (uzaytirish): <b>{len(renewals)} ta</b>\n\n"
+        f"💰 <b>Jami tushum (tasdiqlangan): <u>{int(approved_rev):,} so'm</u></b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━"
+    )
+    
+    if total_count == 0:
+        content = (
+            header + "\n\n"
+            f"ℹ️ <i>Ushbu oyda hali cheklar yoki to'lovlar mavjud emas.</i>\n"
+            f"<i>Бұл айда әзірге жаңа чектер тіркелмеген.</i>"
+        )
+        nav_builder = InlineKeyboardBuilder()
+        avail = await get_available_order_months()
+        for r in avail:
+            y, m = int(r['year']), int(r['month'])
+            if y != year or m != month:
+                nm = MONTH_NAMES_UZ.get(m, str(m))
+                nav_builder.button(text=f"📅 {nm} {y}", callback_data=f"morders_nav:{y}:{m}")
+        nav_builder.adjust(2)
+        return [content], nav_builder.as_markup()
+
+    items_texts = []
+    current_block = header + "\n\n"
+    
+    for i, o in enumerate(orders, 1):
+        mode_str = str(o.get('mode') or '')
+        if mode_str.startswith('renewal:'):
+            months = mode_str.split(':')[1] if ':' in mode_str else '1'
+            type_label = f"🔄 Oylik to'lov ({months} oyga uzaytirish)"
+        else:
+            type_label = f"🛒 Yangi bot xaridi ({mode_str})"
+            
+        status = o.get('status') or 'pending'
+        if status == 'approved':
+            status_text = "✅ Tasdiqlangan"
+        elif status == 'rejected':
+            status_text = "❌ Rad etilgan"
+        else:
+            status_text = "⏳ Kutilmoqda"
+            
+        c_at = o.get('created_at')
+        date_str = c_at.strftime('%Y-%m-%d %H:%M') if c_at else "Noma'lum"
+        client_name = py_html.escape(str(o.get('full_name') or "Noma'lum"))
+        user_un = f"@{o.get('user_username')}" if o.get('user_username') else "username yo'q"
+        bot_un = py_html.escape(str(o.get('bot_username') or "@unknown"))
+        price = int(o.get('total_price') or 0)
+        
+        has_photo = bool(o.get('receipt_file_id') and o.get('receipt_file_id') != "telegram_native_payment")
+        photo_mark = " 🖼" if has_photo else ""
+        
+        order_block = (
+            f"<b>{i}. Chek #{o['id']}{photo_mark}</b>\n"
+            f"  🤖 Bot: <b>{bot_un}</b>\n"
+            f"  👤 Mijoz: <b>{client_name}</b> ({user_un} | ID: <code>{o['user_id']}</code>)\n"
+            f"  📦 Turi: {type_label}\n"
+            f"  💵 Summa: <b>{price:,} so'm</b>\n"
+            f"  📅 Sana: <code>{date_str}</code>\n"
+            f"  📊 Holati: <i>{status_text}</i>\n"
+            f"────────────────────\n"
+        )
+        
+        if len(current_block) + len(order_block) > 3800:
+            items_texts.append(current_block)
+            current_block = order_block
+        else:
+            current_block += order_block
+            
+    if current_block:
+        items_texts.append(current_block)
+        
+    nav_builder = InlineKeyboardBuilder()
+    photo_orders = [o for o in orders if o.get('receipt_file_id') and o.get('receipt_file_id') != "telegram_native_payment"]
+    for po in photo_orders[:6]:
+        nav_builder.button(text=f"🖼 Chek #{po['id']}", callback_data=f"morder_view:{po['id']}")
+    
+    avail = await get_available_order_months()
+    for r in avail:
+        y, m = int(r['year']), int(r['month'])
+        if y != year or m != month:
+            nm = MONTH_NAMES_UZ.get(m, str(m))
+            nav_builder.button(text=f"📅 {nm} {y}", callback_data=f"morders_nav:{y}:{m}")
+            
+    nav_builder.adjust(3, 3, 2, 2)
+    return items_texts, nav_builder.as_markup()
+
+@dp.message(F.text.in_(["🧾 Bu oydagi cheklar", "🧾 Бұл айдағы чектер", "Bu oydagi cheklar", "Бұл айдағы чектер"]))
+async def admin_monthly_receipts_handler(message: types.Message):
+    """Admin uchun joriy oy cheklari va to'lovlari hisoboti."""
+    if message.from_user.id not in ADMINS:
+        return
+    now = datetime.now()
+    texts, markup = await render_month_receipts(now.year, now.month)
+    for i, t in enumerate(texts):
+        if i == len(texts) - 1:
+            await message.answer(t, parse_mode="HTML", reply_markup=markup)
+        else:
+            await message.answer(t, parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("morders_nav:"))
+async def cb_morders_nav(call: types.CallbackQuery):
+    """Boshqa oylardagi cheklarni ko'rish callbacki."""
+    if call.from_user.id not in ADMINS:
+        await call.answer("Ruxsat berilmagan!", show_alert=True)
+        return
+    parts = call.data.split(":")
+    year = int(parts[1])
+    month = int(parts[2])
+    texts, markup = await render_month_receipts(year, month)
+    for i, t in enumerate(texts):
+        if i == len(texts) - 1:
+            await call.message.answer(t, parse_mode="HTML", reply_markup=markup)
+        else:
+            await call.message.answer(t, parse_mode="HTML")
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("morder_view:"))
+async def cb_view_order_receipt(call: types.CallbackQuery):
+    """Chek rasmini adminga ko'rsatish callbacki."""
+    if call.from_user.id not in ADMINS:
+        await call.answer("Ruxsat berilmagan!", show_alert=True)
+        return
+    order_id = int(call.data.split(":")[1])
+    order = await get_order_by_id(order_id)
+    if not order:
+        await call.answer("Buyurtma topilmadi!", show_alert=True)
+        return
+    file_id = order.get('receipt_file_id')
+    if not file_id or file_id == "telegram_native_payment":
+        await call.answer("Bu to'lov uchun rasm mavjud emas (Telegram to'lov yoki karta).", show_alert=True)
+        return
+    mode_str = str(order.get('mode') or '')
+    if mode_str.startswith('renewal:'):
+        months = mode_str.split(':')[1] if ':' in mode_str else '1'
+        type_label = f"🔄 Oylik to'lov ({months} oy)"
+    else:
+        type_label = f"🛒 Yangi bot ({mode_str})"
+    status = order.get('status', 'pending')
+    caption = (
+        f"🧾 <b>Chek #{order['id']} rasmi</b>\n\n"
+        f"🤖 Bot: <b>{order.get('bot_username')}</b>\n"
+        f"👤 Mijoz ID: <code>{order.get('user_id')}</code>\n"
+        f"📦 Turi: {type_label}\n"
+        f"💰 Summa: <b>{int(order.get('total_price') or 0):,} so'm</b>\n"
+        f"📊 Holati: <b>{status}</b>\n"
+        f"📅 Sana: <code>{order.get('created_at')}</code>"
+    )
+    try:
+        await call.message.answer_photo(photo=file_id, caption=caption, parse_mode="HTML")
+        await call.answer()
+    except Exception as e:
+        await call.answer(f"Chek rasmini yuklab bo'lmadi: {e}", show_alert=True)
 
 # ==============================================================================
 # 21-BO'LIM: TO'LOV MUDDATLARINI AVTOMATIK TEKSHIRUVCHI VA ASOSIY ISHGA TUSHIROVCHI

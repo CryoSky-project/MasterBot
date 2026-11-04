@@ -244,6 +244,44 @@ async def update_order_status(order_id: int, status: str):
     async with p.acquire() as conn:
         await conn.execute("UPDATE orders SET status = $1 WHERE id = $2;", status, order_id)
 
+async def get_orders_by_month(year: int = None, month: int = None):
+    """Ko'rsatilgan oy bo'yicha barcha cheklar va buyurtmalarni olish."""
+    now = datetime.now()
+    if year is None:
+        year = now.year
+    if month is None:
+        month = now.month
+
+    start_date = datetime(year, month, 1)
+    if month == 12:
+        end_date = datetime(year + 1, 1, 1)
+    else:
+        end_date = datetime(year, month + 1, 1)
+
+    p = await get_db()
+    async with p.acquire() as conn:
+        query = """
+            SELECT o.*, u.full_name, u.username as user_username
+            FROM orders o
+            LEFT JOIN users u ON o.user_id = u.user_id
+            WHERE o.created_at >= $1 AND o.created_at < $2
+            ORDER BY o.created_at DESC;
+        """
+        return await conn.fetch(query, start_date, end_date)
+
+async def get_available_order_months():
+    """Buyurtmalar mavjud bo'lgan barcha yil va oylarni olish."""
+    p = await get_db()
+    async with p.acquire() as conn:
+        query = """
+            SELECT DISTINCT 
+                EXTRACT(YEAR FROM created_at)::int AS year,
+                EXTRACT(MONTH FROM created_at)::int AS month
+            FROM orders
+            ORDER BY year DESC, month DESC;
+        """
+        return await conn.fetch(query)
+
 # ==============================================================================
 # 6-BO'LIM: TO'LOV CHEKLARI VA DUBLIKATLARNI TEKSHIRISH
 # ==============================================================================
