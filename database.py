@@ -244,6 +244,26 @@ async def update_order_status(order_id: int, status: str):
     async with p.acquire() as conn:
         await conn.execute("UPDATE orders SET status = $1 WHERE id = $2;", status, order_id)
 
+async def try_approve_order_atomic(order_id: int) -> bool:
+    """Buyurtmani faqat 'pending' holatida bo'lsa 'approved' ga o'zgartirish (Idempotent / Double-click dan himoya)."""
+    p = await get_db()
+    async with p.acquire() as conn:
+        res = await conn.execute(
+            "UPDATE orders SET status = 'approved' WHERE id = $1 AND status = 'pending';",
+            order_id
+        )
+        return res.endswith("1")
+
+async def try_reject_order_atomic(order_id: int) -> bool:
+    """Buyurtmani faqat 'pending' holatida bo'lsa 'rejected' ga o'zgartirish."""
+    p = await get_db()
+    async with p.acquire() as conn:
+        res = await conn.execute(
+            "UPDATE orders SET status = 'rejected' WHERE id = $1 AND status = 'pending';",
+            order_id
+        )
+        return res.endswith("1")
+
 async def get_orders_by_month(year: int = None, month: int = None):
     """Ko'rsatilgan oy bo'yicha barcha cheklar va buyurtmalarni olish."""
     now = datetime.now()

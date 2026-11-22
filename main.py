@@ -30,7 +30,8 @@ from database import (
     get_client_bots_by_user, get_setting, set_setting, create_order,
     get_order_by_id, update_order_status, search_clients,
     is_receipt_hash_used, save_receipt_hash,
-    get_orders_by_month, get_available_order_months
+    get_orders_by_month, get_available_order_months,
+    try_approve_order_atomic, try_reject_order_atomic
 )
 from receipt_ai import verify_receipt_with_ai, compute_image_hash
 
@@ -334,6 +335,8 @@ class AdminMenuState(StatesGroup):
 class AdminQuickDurationState(StatesGroup):
     waiting_for_custom_months = State()
     waiting_for_custom_days = State()
+    waiting_for_custom_sub_months = State()
+    waiting_for_custom_sub_days = State()
 
 # ==============================================================================
 # 6-BO'LIM: TUGMA YASOVCHILAR
@@ -1700,18 +1703,40 @@ async def admin_cancel_auto_order(call: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("aord_approve:"))
 async def admin_approve_order(call: types.CallbackQuery, state: FSMContext):
     """Bot xaridlarini yoki uzaytirishlarini tasdiqlash va ma'lumotlar bazasini yangilash."""
-    await call.answer()
     order_id = int(call.data.split(":")[1])
     order = await get_order_by_id(order_id)
     
     if not order:
-        await call.message.reply("❌ Buyurtma topilmadi!")
+        await call.answer("❌ Buyurtma topilmadi!", show_alert=True)
         return
         
+    if order['status'] != 'pending':
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await call.answer("⚠️ Ushbu buyurtma allaqachon tasdiqlangan yoki ko'rib chiqilgan!", show_alert=True)
+        return
+
+    await call.answer()
     mode_str = order['mode']
     if mode_str.startswith("renewal:"):
         months = int(mode_str.split(":")[1])
-        await update_order_status(order_id, "approved")
+        
+        # Double-click yoki ko'p marta bosishdan 100% himoya (faqat 1 marta tasdiqlanadi)
+        success = await try_approve_order_atomic(order_id)
+        if not success:
+            try:
+                await call.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            await call.answer("⚠️ Ushbu buyurtma allaqachon tasdiqlangan!", show_alert=True)
+            return
+            
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         
         # Agar kerak bo'lsa get_db import qilinadi (u allaqachon database.py ichida)
         from database import get_db
@@ -1764,7 +1789,19 @@ async def admin_approve_order(call: types.CallbackQuery, state: FSMContext):
     # Check if auto_create_bot setting is enabled
     auto_create = await get_setting("auto_create_bot", "false")
     if auto_create == "true":
-        await update_order_status(order_id, "approved")
+        success = await try_approve_order_atomic(order_id)
+        if not success:
+            try:
+                await call.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            await call.answer("⚠️ Ushbu buyurtma allaqachon tasdiqlangan!", show_alert=True)
+            return
+
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         
         today_date = datetime.now().date()
         today_str = today_date.strftime("%Y-%m-%d")
@@ -1803,6 +1840,10 @@ async def admin_approve_order(call: types.CallbackQuery, state: FSMContext):
             logging.error(f"Failed to notify user {order['user_id']}: {e}")
         return
 
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await state.update_data(approve_order_id=order_id)
     await state.set_state(AdminOrderActionState.waiting_for_folder_name)
     await call.message.reply(
@@ -1828,7 +1869,11 @@ async def admin_save_order_folder(message: types.Message, state: FSMContext):
         await state.clear()
         return
         
-    await update_order_status(order_id, "approved")
+    success = await try_approve_order_atomic(order_id)
+    if not success:
+        await message.answer("⚠️ Ushbu buyurtma allaqachon tasdiqlangan!")
+        await state.clear()
+        return
     
     # master_clients ma'lumotlar bazasiga saqlash
     today_date = datetime.now().date()
@@ -1869,9 +1914,24 @@ async def admin_save_order_folder(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("aord_reject:"))
 async def admin_reject_order(call: types.CallbackQuery, state: FSMContext):
     """Mijoz botini xarid qilish yoki uzaytirish buyurtmasini rad etish jarayonini boshlash."""
-    await call.answer()
     order_id = int(call.data.split(":")[1])
-    
+    order = await get_order_by_id(order_id)
+    if not order:
+        await call.answer("❌ Buyurtma topilmadi!", show_alert=True)
+        return
+    if order['status'] != 'pending':
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await call.answer("⚠️ Ushbu buyurtma allaqachon ko'rib chiqilgan!", show_alert=True)
+        return
+
+    await call.answer()
+    try:
+        await call.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await state.update_data(reject_order_id=order_id)
     await state.set_state(AdminOrderActionState.waiting_for_reject_reason)
     await call.message.reply(
@@ -1897,8 +1957,11 @@ async def admin_save_reject_reason(message: types.Message, state: FSMContext):
         await state.clear()
         return
         
-    await update_order_status(order_id, "rejected")
+    success = await try_reject_order_atomic(order_id)
     await state.clear()
+    if not success:
+        await message.answer("⚠️ Ushbu buyurtma allaqachon ko'rib chiqilgan!")
+        return
     
     await message.answer("❌ Buyurtma rad etildi va foydalanuvchiga xabar yuborildi.")
     
@@ -2790,10 +2853,12 @@ async def show_bot_detail_view(message: types.Message, client):
     builder.button(text="🔄 Restart", callback_data=f"bot_act:restart:{client['id']}")
     builder.button(text="💰 Oylik to'lash (+1 oy)", callback_data=f"adm_pay_month:{client['id']}")
     builder.button(text="➕ Oy qo'shish", callback_data=f"adm_add_m_menu:{client['id']}")
+    builder.button(text="➖ Oy olish", callback_data=f"adm_sub_m_menu:{client['id']}")
     builder.button(text="➕ Kun qo'shish", callback_data=f"adm_add_d_menu:{client['id']}")
+    builder.button(text="➖ Kun olish", callback_data=f"adm_sub_d_menu:{client['id']}")
     builder.button(text="✏️ Tahrirlash", callback_data=f"edit_client_select:{client['id']}")
     builder.button(text="📋 Ro'yxatga qaytish", callback_data="bot_back_to_list")
-    builder.adjust(2, 1, 2, 1, 1)
+    builder.adjust(2, 1, 2, 2, 1, 1)
     
     try:
         await message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
@@ -3145,6 +3210,245 @@ async def admin_custom_days_input(message: types.Message, state: FSMContext):
         logging.error(f"Failed to notify client: {e}")
 
     await message.answer(f"✅ <b>{days} kun qo'shildi!</b> Yangi sana: <b>{new_next_str}</b>", parse_mode="HTML")
+    updated_client = await get_client_by_id(client_id)
+    await show_bot_detail_view(message, updated_client)
+
+@dp.callback_query(F.data.startswith("adm_sub_m_menu:"))
+async def admin_sub_month_menu_callback(call: types.CallbackQuery):
+    """Oy olib tashlash (ayirish) tanlov menyusini chiqarish."""
+    await call.answer()
+    client_id = int(call.data.split(":")[1])
+    client = await get_client_by_id(client_id)
+    if not client:
+        await call.message.reply("❌ Bot topilmadi!")
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➖ 1 oy", callback_data=f"adm_sub_m:{client_id}:1")
+    builder.button(text="➖ 2 oy", callback_data=f"adm_sub_m:{client_id}:2")
+    builder.button(text="➖ 3 oy", callback_data=f"adm_sub_m:{client_id}:3")
+    builder.button(text="➖ 6 oy", callback_data=f"adm_sub_m:{client_id}:6")
+    builder.button(text="➖ 12 oy", callback_data=f"adm_sub_m:{client_id}:12")
+    builder.button(text="✍️ Qo'lda kiritish", callback_data=f"adm_custom_sub_m:{client_id}")
+    builder.button(text="⬅️ Orqaga", callback_data=f"manage_bot:{client_id}")
+    builder.adjust(2, 3, 1, 1)
+
+    text = (
+        f"📅 <b>Oy olib tashlash (ayirish):</b>\n\n"
+        f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+        f"⏳ Hozirgi muddat: <b>{client['next_payment_date']}</b>\n\n"
+        f"Necha oy olib tashlamoqchisiz?"
+    )
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data.startswith("adm_sub_m:"))
+async def admin_sub_month_exec_callback(call: types.CallbackQuery):
+    """Tanlangan oylarni bot muddatidan olib tashlash."""
+    await call.answer()
+    parts = call.data.split(":")
+    client_id = int(parts[1])
+    months = int(parts[2])
+    client = await get_client_by_id(client_id)
+    if not client:
+        await call.message.reply("❌ Bot topilmadi!")
+        return
+
+    today = datetime.now().date()
+    current_next = client['next_payment_date']
+    new_next = add_months(current_next, -months)
+    new_next_str = new_next.strftime("%Y-%m-%d")
+
+    await update_client_field(client['id'], 'next_payment_date', new_next_str)
+    if new_next < today:
+        await update_client_field(client['id'], 'status', 'expired')
+
+    try:
+        await bot.send_message(
+            client['client_id'],
+            f"ℹ️ <b>Botingizning to'lov muddati {months} oyga qisqartirildi.</b>\n\n"
+            f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+            f"⏳ Yangi muddat: <b>{new_next_str}</b>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Failed to notify client: {e}")
+
+    await call.answer(f"✅ {months} oy olib tashlandi! Yangi sana: {new_next_str}", show_alert=True)
+    updated_client = await get_client_by_id(client_id)
+    await show_bot_detail_view(call.message, updated_client)
+
+@dp.callback_query(F.data.startswith("adm_sub_d_menu:"))
+async def admin_sub_days_menu_callback(call: types.CallbackQuery):
+    """Kun olib tashlash tanlov menyusini chiqarish."""
+    await call.answer()
+    client_id = int(call.data.split(":")[1])
+    client = await get_client_by_id(client_id)
+    if not client:
+        await call.message.reply("❌ Bot topilmadi!")
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➖ 1 kun", callback_data=f"adm_sub_d:{client_id}:1")
+    builder.button(text="➖ 3 kun", callback_data=f"adm_sub_d:{client_id}:3")
+    builder.button(text="➖ 7 kun", callback_data=f"adm_sub_d:{client_id}:7")
+    builder.button(text="➖ 10 kun", callback_data=f"adm_sub_d:{client_id}:10")
+    builder.button(text="➖ 15 kun", callback_data=f"adm_sub_d:{client_id}:15")
+    builder.button(text="➖ 30 kun", callback_data=f"adm_sub_d:{client_id}:30")
+    builder.button(text="✍️ Qo'lda kiritish", callback_data=f"adm_custom_sub_d:{client_id}")
+    builder.button(text="⬅️ Orqaga", callback_data=f"manage_bot:{client_id}")
+    builder.adjust(3, 3, 1, 1)
+
+    text = (
+        f"📅 <b>Kun olib tashlash (ayirish):</b>\n\n"
+        f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+        f"⏳ Hozirgi muddat: <b>{client['next_payment_date']}</b>\n\n"
+        f"Necha kun olib tashlamoqchisiz?"
+    )
+    await call.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data.startswith("adm_sub_d:"))
+async def admin_sub_days_exec_callback(call: types.CallbackQuery):
+    """Tanlangan kunlarni bot muddatidan olib tashlash."""
+    await call.answer()
+    parts = call.data.split(":")
+    client_id = int(parts[1])
+    days = int(parts[2])
+    client = await get_client_by_id(client_id)
+    if not client:
+        await call.message.reply("❌ Bot topilmadi!")
+        return
+
+    today = datetime.now().date()
+    current_next = client['next_payment_date']
+    if isinstance(current_next, str):
+        current_next = datetime.strptime(current_next.strip(), "%Y-%m-%d").date()
+    new_next = current_next - timedelta(days=days)
+    new_next_str = new_next.strftime("%Y-%m-%d")
+
+    await update_client_field(client['id'], 'next_payment_date', new_next_str)
+    if new_next < today:
+        await update_client_field(client['id'], 'status', 'expired')
+
+    try:
+        await bot.send_message(
+            client['client_id'],
+            f"ℹ️ <b>Botingizning to'lov muddati {days} kunga qisqartirildi.</b>\n\n"
+            f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+            f"⏳ Yangi muddat: <b>{new_next_str}</b>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Failed to notify client: {e}")
+
+    await call.answer(f"✅ {days} kun olib tashlandi! Yangi sana: {new_next_str}", show_alert=True)
+    updated_client = await get_client_by_id(client_id)
+    await show_bot_detail_view(call.message, updated_client)
+
+@dp.callback_query(F.data.startswith("adm_custom_sub_m:"))
+async def admin_custom_sub_month_prompt(call: types.CallbackQuery, state: FSMContext):
+    """Qo'lda oy olib tashlash so'rovi."""
+    await call.answer()
+    client_id = int(call.data.split(":")[1])
+    await state.update_data(target_client_id=client_id)
+    await state.set_state(AdminQuickDurationState.waiting_for_custom_sub_months)
+    await call.message.answer("✍️ Necha oy olib tashlamoqchisiz? (Faqat butun son kiriting, masalan: 1):", reply_markup=get_cancel_keyboard())
+
+@dp.message(AdminQuickDurationState.waiting_for_custom_sub_months)
+async def admin_custom_sub_month_input(message: types.Message, state: FSMContext):
+    """Kiritilgan oylarni muddatdan olib tashlash."""
+    text = message.text.strip()
+    if is_menu_button_or_command(text):
+        await state.clear()
+        return
+    if not text.isdigit() or int(text) <= 0:
+        await message.answer("❌ Iltimos, musbat butun son kiriting:")
+        return
+    months = int(text)
+    data = await state.get_data()
+    client_id = data['target_client_id']
+    await state.clear()
+    
+    client = await get_client_by_id(client_id)
+    if not client:
+        await message.answer("❌ Bot topilmadi!")
+        return
+
+    today = datetime.now().date()
+    current_next = client['next_payment_date']
+    new_next = add_months(current_next, -months)
+    new_next_str = new_next.strftime("%Y-%m-%d")
+
+    await update_client_field(client['id'], 'next_payment_date', new_next_str)
+    if new_next < today:
+        await update_client_field(client['id'], 'status', 'expired')
+
+    try:
+        await bot.send_message(
+            client['client_id'],
+            f"ℹ️ <b>Botingizning to'lov muddati {months} oyga qisqartirildi.</b>\n\n"
+            f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+            f"⏳ Yangi muddat: <b>{new_next_str}</b>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Failed to notify client: {e}")
+
+    await message.answer(f"✅ <b>{months} oy olib tashlandi!</b> Yangi sana: <b>{new_next_str}</b>", parse_mode="HTML")
+    updated_client = await get_client_by_id(client_id)
+    await show_bot_detail_view(message, updated_client)
+
+@dp.callback_query(F.data.startswith("adm_custom_sub_d:"))
+async def admin_custom_sub_days_prompt(call: types.CallbackQuery, state: FSMContext):
+    """Qo'lda kun olib tashlash so'rovi."""
+    await call.answer()
+    client_id = int(call.data.split(":")[1])
+    await state.update_data(target_client_id=client_id)
+    await state.set_state(AdminQuickDurationState.waiting_for_custom_sub_days)
+    await call.message.answer("✍️ Necha kun olib tashlamoqchisiz? (Faqat butun son kiriting, masalan: 7):", reply_markup=get_cancel_keyboard())
+
+@dp.message(AdminQuickDurationState.waiting_for_custom_sub_days)
+async def admin_custom_sub_days_input(message: types.Message, state: FSMContext):
+    """Kiritilgan kunlarni muddatdan olib tashlash."""
+    text = message.text.strip()
+    if is_menu_button_or_command(text):
+        await state.clear()
+        return
+    if not text.isdigit() or int(text) <= 0:
+        await message.answer("❌ Iltimos, musbat butun son kiriting:")
+        return
+    days = int(text)
+    data = await state.get_data()
+    client_id = data['target_client_id']
+    await state.clear()
+    
+    client = await get_client_by_id(client_id)
+    if not client:
+        await message.answer("❌ Bot topilmadi!")
+        return
+
+    today = datetime.now().date()
+    current_next = client['next_payment_date']
+    if isinstance(current_next, str):
+        current_next = datetime.strptime(current_next.strip(), "%Y-%m-%d").date()
+    new_next = current_next - timedelta(days=days)
+    new_next_str = new_next.strftime("%Y-%m-%d")
+
+    await update_client_field(client['id'], 'next_payment_date', new_next_str)
+    if new_next < today:
+        await update_client_field(client['id'], 'status', 'expired')
+
+    try:
+        await bot.send_message(
+            client['client_id'],
+            f"ℹ️ <b>Botingizning to'lov muddati {days} kunga qisqartirildi.</b>\n\n"
+            f"🤖 Bot: <b>{client['bot_username']}</b>\n"
+            f"⏳ Yangi muddat: <b>{new_next_str}</b>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logging.error(f"Failed to notify client: {e}")
+
+    await message.answer(f"✅ <b>{days} kun olib tashlandi!</b> Yangi sana: <b>{new_next_str}</b>", parse_mode="HTML")
     updated_client = await get_client_by_id(client_id)
     await show_bot_detail_view(message, updated_client)
 
