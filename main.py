@@ -8,6 +8,7 @@ import asyncio
 import logging
 import calendar
 import paramiko
+import threading
 import html as py_html
 from datetime import datetime, timedelta, date
 from dotenv import load_dotenv
@@ -117,33 +118,76 @@ def add_months(source_date, months: int) -> date:
     day = min(source_date.day, calendar.monthrange(year, month)[1])
     return date(year, month, day)
 
-def execute_remote_command(command: str, timeout: int = 15) -> tuple[int, str, str]:
-    """Masofaviy VPS serverda (157.173.110.5) SSH orqali buyruq bajarish."""
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    try:
-        ssh.connect(
+_ssh_client: paramiko.SSHClient | None = None
+_ssh_lock = threading.Lock()
+
+def get_persistent_ssh() -> paramiko.SSHClient:
+    """VPS serverga doimiy (persistent) SSH ulanishini qaytaradi va uni doimo ochiq saqlaydi."""
+    global _ssh_client
+    with _ssh_lock:
+        if _ssh_client is not None:
+            try:
+                transport = _ssh_client.get_transport()
+                if transport and transport.is_active():
+                    return _ssh_client
+            except Exception:
+                pass
+            try:
+                _ssh_client.close()
+            except Exception:
+                pass
+            _ssh_client = None
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(
             hostname=VPS_HOST,
             port=VPS_PORT,
             username=VPS_USER,
             password=VPS_PASSWORD,
-            timeout=timeout,
-            banner_timeout=timeout,
-            auth_timeout=timeout
+            timeout=15,
+            banner_timeout=15,
+            auth_timeout=15
         )
-        stdin, stdout, stderr = ssh.exec_command(command, timeout=timeout)
-        exit_code = stdout.channel.recv_exit_status()
-        out = stdout.read().decode('utf-8', errors='ignore').strip()
-        err = stderr.read().decode('utf-8', errors='ignore').strip()
-        return exit_code, out, err
-    except Exception as e:
-        logging.error(f"SSH execution error on {VPS_HOST}: {e}")
-        return -1, "", str(e)
-    finally:
+        transport = client.get_transport()
+        if transport:
+            transport.set_keepalive(30)  # Har 30 soniyada keepalive ping - aloqa uzilmasligi va server ichida doimiy turishi uchun
+        _ssh_client = client
+        logging.info(f"✅ Masofaviy VPS serverga doimiy SSH aloqasi o'rnatildi ({VPS_HOST})")
+        return _ssh_client
+
+def execute_remote_command(command: str, timeout: int = 15) -> tuple[int, str, str]:
+    """Masofaviy VPS serverda (157.173.110.5) doimiy ochiq turadigan SSH orqali buyruq bajarish."""
+    for attempt in range(2):
         try:
-            ssh.close()
-        except Exception:
-            pass
+            ssh = get_persistent_ssh()
+            stdin, stdout, stderr = ssh.exec_command(command, timeout=timeout)
+            exit_code = stdout.channel.recv_exit_status()
+            out = stdout.read().decode('utf-8', errors='ignore').strip()
+            err = stderr.read().decode('utf-8', errors='ignore').strip()
+            return exit_code, out, err
+        except Exception as e:
+            logging.warning(f"SSH execution error (urinish {attempt+1}) on {VPS_HOST}: {e}")
+            global _ssh_client
+            with _ssh_lock:
+                if _ssh_client:
+                    try:
+                        _ssh_client.close()
+                    except Exception:
+                        pass
+                    _ssh_client = None
+            if attempt == 1:
+                return -1, "", str(e)
+    return -1, "", "SSH aloqa xatosi"
+
+async def ssh_keepalive_loop():
+    """Fonda doimiy SSH aloqasini ushlab turuvchi va uzilib qolsa qayta ulovchi loop."""
+    while True:
+        try:
+            await asyncio.to_thread(get_persistent_ssh)
+        except Exception as e:
+            logging.warning(f"SSH doimiy aloqa (keepalive) xatosi: {e}")
+        await asyncio.sleep(25)
 
 def check_remote_folder_exists(server_folder: str) -> bool:
     """Masofaviy serverda bot papkasi mavjudligini tekshirish."""
@@ -4099,6 +4143,9 @@ async def main():
     
     # Master bot ishga tushganda bir marta darhol tekshirish
     asyncio.create_task(check_payments_and_notify())
+    
+    # Doimiy (persistent) SSH aloqasini fonda doimo ochiq saqlash
+    asyncio.create_task(ssh_keepalive_loop())
     
     # Render Keep-Alive: Har 5 daqiqada o'ziga ping so'rovi yuborish
     ping_url = os.getenv("PING_URL", "").strip()
