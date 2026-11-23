@@ -1,9 +1,11 @@
+from __future__ import annotations
 # ==============================================================================
 # 1-BO'LIM: KUTUBXONALARNI IMPORT QILISH VA BOSH KOD
 # ==============================================================================
 import os
 import io
 import re
+import time
 import asyncio
 import logging
 import calendar
@@ -57,6 +59,11 @@ VPS_HOST = os.getenv("VPS_HOST", "157.173.110.5")
 VPS_PORT = int(os.getenv("VPS_PORT", "22"))
 VPS_USER = os.getenv("VPS_USER", "root")
 VPS_PASSWORD = os.getenv("VPS_PASSWORD", "Dyr20090308.")
+VPS_KEY_BASE64 = os.getenv(
+    "VPS_KEY_BASE64",
+    "LS0tLS1CRUdJTiBPUEVOU1NIIFBSSVZBVEUgS0VZLS0tLS0KYjNCbGJuTnphQzFyWlhrdGRqRUFBQUFBQkc1dmJtVUFBQUFFYm05dVpRQUFBQUFBQUFBQkFBQUFNd0FBQUF0emMyZ3RaVwpReU5UVXhPUUFBQUNBOGRkd1VBYWxELzhJMTdaVFFkbVNHMzhzbGRETHpubDNtYnNyOWNDVmoyZ0FBQUpqOUNYRHIvUWx3CjZ3QUFBQXR6YzJndFpXUXlOVFV4T1FBQUFDQThkZHdVQWFsRC84STE3WlRRZG1TRzM4c2xkREx6bmwzbWJzcjljQ1ZqMmcKQUFBRUNNY3hDZnBkUDJYWVBNRDZVMEc5WWVqNmtDMSthSjByQ3F0cWtDMjV5aGRqeDEzQlFCcVVQL3dqWHRsTkIyWkliZgp5eVYwTXZPZVhlWnV5djF3SldQYUFBQUFEbVJwWTNSaGRHOXlMV0ZuWlc1MEFRSURCQVVHQnc9PQotLS0tLUVORCBPUEVOU1NIIFBSSVZBVEUgS0VZLS0tLS0K"
+)
+VPS_KEY_PATH = os.getenv("VPS_KEY_PATH", "/root/.ssh/dictator_ed25519")
 
 # Bot va Dispatcher obyektlarini yaratish
 try:
@@ -120,11 +127,47 @@ def add_months(source_date, months: int) -> date:
 
 _ssh_client: paramiko.SSHClient | None = None
 _ssh_lock = threading.Lock()
+_ssh_last_connect_time: float = 0.0
+
+def _load_ssh_pkey() -> paramiko.PKey | None:
+    """Ed25519 / RSA shaxsiy kalitini Base64 yoki fayl tizimidan yuklash."""
+    import io
+    import base64
+    if VPS_KEY_BASE64:
+        try:
+            raw_key = base64.b64decode(VPS_KEY_BASE64.strip()).decode('utf-8')
+            return paramiko.Ed25519Key.from_private_key(io.StringIO(raw_key))
+        except Exception:
+            try:
+                raw_key = base64.b64decode(VPS_KEY_BASE64.strip()).decode('utf-8')
+                return paramiko.RSAKey.from_private_key(io.StringIO(raw_key))
+            except Exception as e:
+                logging.warning(f"VPS_KEY_BASE64 dan kalitni o'qishda xatolik: {e}")
+
+    if VPS_KEY_PATH and os.path.exists(VPS_KEY_PATH):
+        try:
+            return paramiko.Ed25519Key.from_private_key_file(VPS_KEY_PATH)
+        except Exception:
+            try:
+                return paramiko.RSAKey.from_private_key_file(VPS_KEY_PATH)
+            except Exception as e:
+                logging.warning(f"VPS_KEY_PATH dan kalitni o'qishda xatolik: {e}")
+    return None
 
 def get_persistent_ssh() -> paramiko.SSHClient:
-    """VPS serverga doimiy (persistent) SSH ulanishini qaytaradi va uni doimo ochiq saqlaydi."""
-    global _ssh_client
+    """VPS serverga doimiy (persistent) SSH ulanishini qaytaradi, keepalive ping jo'natadi va 24 soatdan so'ng xavfsiz qayta ulanadi."""
+    global _ssh_client, _ssh_last_connect_time
     with _ssh_lock:
+        now = time.time()
+        # 24 soat (86400 soniya) o'tgach ulanishni xavfsiz yangilash
+        if _ssh_client is not None and (now - _ssh_last_connect_time) > 86400:
+            logging.info("⏳ SSH aloqasi 24 soat davomida ishladi. Yangilash uchun qayta ulanmoqda...")
+            try:
+                _ssh_client.close()
+            except Exception:
+                pass
+            _ssh_client = None
+
         if _ssh_client is not None:
             try:
                 transport = _ssh_client.get_transport()
@@ -140,19 +183,37 @@ def get_persistent_ssh() -> paramiko.SSHClient:
 
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(
-            hostname=VPS_HOST,
-            port=VPS_PORT,
-            username=VPS_USER,
-            password=VPS_PASSWORD,
-            timeout=15,
-            banner_timeout=15,
-            auth_timeout=15
-        )
+        
+        pkey = _load_ssh_pkey()
+        connect_kwargs = {
+            "hostname": VPS_HOST,
+            "port": VPS_PORT,
+            "username": VPS_USER,
+            "timeout": 15,
+            "banner_timeout": 15,
+            "auth_timeout": 15
+        }
+        if pkey:
+            connect_kwargs["pkey"] = pkey
+        elif VPS_PASSWORD:
+            connect_kwargs["password"] = VPS_PASSWORD
+
+        try:
+            client.connect(**connect_kwargs)
+        except Exception as e:
+            if pkey and VPS_PASSWORD:
+                logging.warning(f"SSH kalit orqali ulanish o'xshamadi ({e}), parol bilan urinib ko'rilmoqda...")
+                connect_kwargs.pop("pkey", None)
+                connect_kwargs["password"] = VPS_PASSWORD
+                client.connect(**connect_kwargs)
+            else:
+                raise e
+
         transport = client.get_transport()
         if transport:
-            transport.set_keepalive(30)  # Har 30 soniyada keepalive ping - aloqa uzilmasligi va server ichida doimiy turishi uchun
+            transport.set_keepalive(30)  # Har 30 soniyada keepalive ping - aloqa uzilmasligi uchun
         _ssh_client = client
+        _ssh_last_connect_time = time.time()
         logging.info(f"✅ Masofaviy VPS serverga doimiy SSH aloqasi o'rnatildi ({VPS_HOST})")
         return _ssh_client
 
@@ -2513,9 +2574,11 @@ async def render_edit_client_fields(target_message, client: dict, state: FSMCont
     builder.button(text="📊 Holati", callback_data="efield:status")
     builder.button(text="💰 Oylik to'lash (+1 oy)", callback_data=f"adm_pay_month:{rec_id}")
     builder.button(text="➕ Oy qo'shish", callback_data=f"adm_add_m_menu:{rec_id}")
+    builder.button(text="➖ Oy olish", callback_data=f"adm_sub_m_menu:{rec_id}")
     builder.button(text="➕ Kun qo'shish", callback_data=f"adm_add_d_menu:{rec_id}")
+    builder.button(text="➖ Kun olish", callback_data=f"adm_sub_d_menu:{rec_id}")
     builder.button(text="⬅️ Bekor qilish", callback_data="edit_client_cancel")
-    builder.adjust(2, 2, 2, 2, 1, 2, 1, 1)
+    builder.adjust(2, 2, 2, 2, 1, 2, 2, 1)
     
     st_emoji = "🟢 ACTIVE" if client.get('status') == 'active' else "🔴 EXPIRED / TO'XTATILGAN"
     info_text = (
