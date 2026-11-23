@@ -4190,6 +4190,61 @@ async def start_web_server():
     logging.info(f"🚀 Render Web server {port}-portda muvaffaqiyatli ishga tushdi!")
     return runner
 
+
+# ==============================================================================
+# CYZEXFILEBOT (@Cyzexfilebot / LOGOBOT) MONITOR & AUTO-RESTART
+# ==============================================================================
+CYZEX_BOT_TOKEN = "8964013713:AAG8V-PHzHwl4T1n4-1W0VCkJtBnFVsqrbw"
+CYZEX_REPO_DIR = "/root/sky/sky-bot/my-project/logobot"
+
+async def check_and_restart_cyzexfilebot():
+    """Har soatda @Cyzexfilebot (Render) holatini tekshiradi va to'xtab qolsa Render-da qayta ishga tushiradi."""
+    logging.info("🔍 [MasterBot Watchdog] @Cyzexfilebot holati tekshirilmoqda...")
+    is_alive = False
+    try:
+        url = f"https://api.telegram.org/bot{CYZEX_BOT_TOKEN}/getMe"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    is_alive = data.get("ok", False)
+    except Exception as e:
+        logging.warning(f"[MasterBot Watchdog] @Cyzexfilebot tekshirishda xatolik: {e}")
+
+    if is_alive:
+        logging.info("✅ [MasterBot Watchdog] @Cyzexfilebot (Logobot) faol va ishlayapti.")
+    else:
+        logging.warning("⚠️ [MasterBot Watchdog] @Cyzexfilebot javob bermadi! Render-da qayta ishga tushirilmoqda...")
+        try:
+            # Agar VPS-da bo'lsa mahalliy git push orqali, yoki SSH orqali trigger
+            trigger_cmd = (
+                f"cd {CYZEX_REPO_DIR} && "
+                "git commit --allow-empty -m 'chore(render): auto-restart triggered by MasterBot' && "
+                "git push origin main"
+            )
+            proc = await asyncio.create_subprocess_shell(
+                trigger_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                logging.info("🚀 [MasterBot Watchdog] @Cyzexfilebot Render-da muvaffaqiyatli qayta ishga tushirildi!")
+                for adm in [8551089366]:
+                    try:
+                        await bot.send_message(
+                            adm,
+                            "🔄 <b>[MasterBot Xabarnoma]</b>\n\n"
+                            "<b>@Cyzexfilebot</b> (Logobot) to'xtab qolganligi aniqlandi va Render-da qayta ishga tushirildi (Auto-Restart)! ✅",
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
+            else:
+                logging.error(f"[MasterBot Watchdog] Qayta ishga tushirishda xatolik: {stderr.decode()}")
+        except Exception as ex:
+            logging.error(f"[MasterBot Watchdog] Istisno yuz berdi: {ex}")
+
 async def main():
     # Render port scanning uchun HTTP web serverini darhol ishga tushirish
     try:
@@ -4202,6 +4257,9 @@ async def main():
     # Har soatda va har kuni ertalab 9:00 da to'lovlarni avtomatik tekshiruvchi scheduler
     scheduler.add_job(check_payments_and_notify, 'interval', hours=1)
     scheduler.add_job(check_payments_and_notify, 'cron', hour=9, minute=0)
+    # @Cyzexfilebot (Logobot) har soatda tekshirish va o'chib qolsa qayta yoqish
+    scheduler.add_job(check_and_restart_cyzexfilebot, 'interval', hours=1)
+    asyncio.create_task(check_and_restart_cyzexfilebot())
     scheduler.start()
     
     # Master bot ishga tushganda bir marta darhol tekshirish
